@@ -13,6 +13,7 @@ defmodule NimbleOwnership.MixProject do
       deps: deps(),
 
       # Hex package
+      description: "Track ownership of resources across processes.",
       package: package(),
 
       # Docs
