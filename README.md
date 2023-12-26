@@ -2,6 +2,7 @@
 
 [![hex.pm badge](https://img.shields.io/badge/Package%20on%20hex.pm-informational)](https://hex.pm/packages/nimble_ownership)
 [![Documentation badge](https://img.shields.io/badge/Documentation-ff69b4)][docs]
+[![CI](https://github.com/dashbitco/nimble_ownership/actions/workflows/ci.yml/badge.svg)](https://github.com/dashbitco/nimble_ownership/actions/workflows/ci.yml)
 
 > Library that allows you to manage ownership of resources across processes.
 
