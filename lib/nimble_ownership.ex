@@ -148,7 +148,8 @@ defmodule NimbleOwnership do
 
     case state.allowances[pid_to_allow][key] do
       %{owner_pid: other_owner_pid} when other_owner_pid != owner_pid ->
-        {:reply, {:error, {:already_allowed, other_owner_pid}}, state}
+        error = %NimbleOwnership.Error{reason: {:already_allowed, other_owner_pid}}
+        {:reply, {:error, error}, state}
 
       _other ->
         state =
