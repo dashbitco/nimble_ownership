@@ -10,7 +10,7 @@ defmodule NimbleOwnership do
     pidA["Process A"]
     pidB["Process B"]
     pidC["Process C"]
-    res(["Resource"])
+    res(["Resource (with associated metadata)"])
 
     pidA -->|Owns| res
     pidA -->|Allows| pidB
@@ -34,9 +34,8 @@ defmodule NimbleOwnership do
 
   ### Metadata
 
-  You can store arbitrary metadata (`t:metadata/0`) alongside each "allowance", that is,
-  alongside the relationship between a process and a key. This metadata is returned
-  together with the owner PID when you call `get_owner/3`.
+  You can store arbitrary metadata (`t:metadata/0`) alongside each **owned resource**.
+  This metadata is returned together with the owner PID when you call `get_owner/3`.
   """
 
   use GenServer
@@ -49,11 +48,16 @@ defmodule NimbleOwnership do
   @typedoc "Arbitrary key."
   @type key() :: term()
 
-  @typedoc "Arbitrary metadata associated with an *allowance*."
+  @typedoc "Arbitrary metadata associated with an owned `t:key/0`."
   @type metadata() :: term()
 
-  @typedoc "Information about the owner of a key returned by `get_owner/3`."
-  @type owner_info() :: %{metadata: metadata(), owner_pid: pid()}
+  @typedoc """
+  Information about the owner of a key.
+
+  This is returned by `get_owner/3` and passed to the callback function in
+  `get_and_update/4`.
+  """
+  @type owner_info() :: {owner_pid :: pid(), metadata()}
 
   @genserver_opts [
     :name,
@@ -89,9 +93,6 @@ defmodule NimbleOwnership do
   Use this function when `owner_pid` is allowed access to `key`, and you want
   to also allow `pid_to_allow` to use `key`.
 
-  `metadata` is an arbitrary term that you can use to store additional information
-  about the allowance. It is returned by `get_owner/3`.
-
   This function returns an error when `pid_to_allow` is already allowed to use
   `key` via **another owner PID** that is not `owner_pid`.
 
@@ -99,10 +100,12 @@ defmodule NimbleOwnership do
 
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
       iex> {:ok, server} = NimbleOwnership.start_link()
-      iex> NimbleOwnership.allow(server, self(), pid, :my_key, %{counter: 1})
+      iex> NimbleOwnership.get_and_update(server, self(), :my_key, fn _ -> {:ok, _meta = %{}} end)
+      :ok
+      iex> NimbleOwnership.allow(server, self(), pid, :my_key)
       :ok
       iex> NimbleOwnership.get_owner(server, [pid], :my_key)
-      %{owner_pid: self(), metadata: %{counter: 1}}
+      {:ok, {self(), %{}}}
 
   """
   @spec allow(server(), pid(), pid() | (-> pid()), key()) ::
@@ -113,20 +116,58 @@ defmodule NimbleOwnership do
   end
 
   @doc """
-  TODO
+  Accesses `key` (owned by `owner_pid`) or initializes the ownership.
+
+  Use this function for these purposes:
+
+    * to initialize the ownership of a key
+    * to access the metadata associated with a key
+    * to update the metadata associated with a key
+
+  ## Usage
+
+  When `owner_pid` doesn't own `key`, the value passed to `fun` will be `nil`.
+  If `fun` returns `nil`, then the ownership of `key` will not be initialized
+  and this function will return `nil` itself. If `fun` returns `{get_value, new_meta}`,
+  then `owner_pid` will start owning `key` and `new_meta` will be the metadata associated
+  with that ownership.
+
+  When `owner_pid` owns `key`, the value passed to `fun` will be `{owner_pid, metadata}`.
+  If `fun` returns `nil`, then nothing changes in the ownerships and this function returns
+  `nil`.
+
+  ### Updating Metadata from an Allowed Process
+
+  If you don't directly have access to the owner PID, but you want to update the metadata
+  associated with the owner PID and `key` *from an allowed process*, do this instead:
+
+    1. Fetch the owner of `key` through `get_owner/3`.
+    2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
+       function that returns the new metadata.
+
   """
-  @spec get_and_update(server(), [pid()], key(), fun) :: {:ok, reply} | {:error, Error.t()}
-        when fun:
-               (nil -> {:set_owner, pid(), reply, metadata()} | {:noop, reply})
-               | (owner_info() -> {:update_metadata, reply, metadata()} | {:noop, reply}),
-             reply: term()
-  def get_and_update(ownership_server, callers, key, fun)
-      when is_list(callers) and is_function(fun, 1) do
-    GenServer.call(ownership_server, {:get_and_update, callers, key, fun})
+  @spec get_and_update(server(), pid(), key(), fun) :: get_value | nil
+        when fun: (nil | owner_info() -> {get_value, updated_metadata :: metadata()} | nil),
+             get_value: term()
+  def get_and_update(ownership_server, owner_pid, key, fun)
+      when is_pid(owner_pid) and is_function(fun, 1) do
+    case GenServer.call(ownership_server, {:get_and_update, owner_pid, key, fun}) do
+      {:ok, get_value} -> get_value
+      {:error, error} when is_exception(error) -> raise error
+    end
   end
 
   @doc """
-  TODO
+  Gets the owner of `key` through one of the `callers`.
+
+  If one of the `callers` owns `key` or is allowed access to `key`,
+  then this function returns `{:ok, {owner_pid, metadata}}` where `metadata` is the
+  metadata associated with the `key` under the owner.
+
+  If none of the callers owns `key` or is allowed access to `key`, then this function
+  returns `{:error, reason}`.
+
+  For usage examples, see `allow/4`.
   """
   @spec get_owner(server(), [pid(), ...], key()) :: {:ok, owner_info()} | {:error, reason}
         when reason: Error.t()
@@ -208,64 +249,42 @@ defmodule NimbleOwnership do
     end
   end
 
-  def handle_call({:get_and_update, callers, key, fun}, _from, %__MODULE__{} = state) do
+  def handle_call({:get_and_update, owner_pid, key, fun}, _from, %__MODULE__{} = state) do
     state = revalidate_lazy_calls(state)
 
-    # First, we find the owner PID through the callers. Either we do that through the allowances
-    # (one of the callers is allowed to access "key"), or one of the callers is the actual owner
-    # of "key".
-    owner_pid_through_callers =
-      Enum.find_value(callers, nil, fn caller ->
-        cond do
-          owner = state.allowances[caller][key] -> owner
-          _meta = state.owners[caller][key] -> caller
-          true -> nil
-        end
-      end)
+    owner_info =
+      if meta = state.owners[owner_pid][key] do
+        {owner_pid, meta}
+      else
+        nil
+      end
 
-    cond do
-      # There is already an existing owner for "key" that we found through the allowances
-      # for one of the callers. This means that we can update the metadata, because the
-      # caller is allowed to access "key".
-      meta = state.owners[owner_pid_through_callers][key] ->
-        case fun.(%{owner_pid: owner_pid_through_callers, metadata: meta}) do
-          {:update_metadata, reply, new_meta} ->
-            state = put_in(state.owners[owner_pid_through_callers][key], new_meta)
-            {:reply, {:ok, reply}, state}
+    case fun.(owner_info) do
+      {get_value, new_meta} ->
+        state = put_in(state, [Access.key!(:owners), Access.key(owner_pid, %{}), key], new_meta)
 
-          {:noop, reply} ->
-            {:reply, {:ok, reply}, state}
+        # We should also monitor the new owner, if it hasn't already been monitored. That
+        # can happen if that owner is already the owner of another key.
+        state =
+          if state.monitors[owner_pid] do
+            state
+          else
+            ref = Process.monitor(owner_pid)
+            put_in(state.monitors[owner_pid], ref)
+          end
 
-          {:set_owner, _new_pid, _reply, _meta} ->
-            error = %Error{key: key, reason: {:cannot_reset_owner, owner_pid_through_callers}}
-            {:reply, {:error, error}, state}
-        end
+        {:reply, {:ok, get_value}, state}
 
-      # There is no existing owner for "key", so we can (possibly) initialize it through "fun".
-      true ->
-        case fun.(nil) do
-          {:set_owner, owner, reply, meta} ->
-            state = put_in(state, [Access.key!(:owners), Access.key(owner, %{}), key], meta)
+      nil ->
+        {:reply, {:ok, nil}, state}
 
-            # We should also monitor the new owner, if it hasn't already been monitored. That
-            # can happen if that owner is already the owner of another key.
-            state =
-              if state.monitors[owner] do
-                state
-              else
-                ref = Process.monitor(owner)
-                put_in(state.monitors[owner], ref)
-              end
+      other ->
+        message = """
+        invalid return value from callback function. Expected nil or a tuple of the form \
+        {get_value, update_value} (see the function's @spec), instead got: #{inspect(other)}\
+        """
 
-            {:reply, {:ok, reply}, state}
-
-          {:update_metadata, _reply, _meta} ->
-            error = %Error{key: key, reason: :cannot_update_metadata_on_non_existing}
-            {:reply, {:error, error}, state}
-
-          {:noop, reply} ->
-            {:reply, {:ok, reply}, state}
-        end
+        {:reply, {:error, %ArgumentError{message: message}}, state}
     end
   end
 
@@ -276,10 +295,10 @@ defmodule NimbleOwnership do
       cond do
         owner_pid = state.allowances[caller][key] ->
           meta = state.owners[owner_pid][key]
-          {:reply, {:ok, %{owner_pid: owner_pid, metadata: meta}}, state}
+          {:reply, {:ok, {owner_pid, meta}}, state}
 
         meta = state.owners[caller][key] ->
-          {:reply, {:ok, %{owner_pid: caller, metadata: meta}}, state}
+          {:reply, {:ok, {caller, meta}}, state}
 
         true ->
           nil
