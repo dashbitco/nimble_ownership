@@ -28,14 +28,8 @@ defmodule NimbleOwnershipTest do
                  {:ok, %{counter: 1}}
                end)
 
-      assert {:ok, {owner_pid, _meta}} = NimbleOwnership.get_owner(@server, [self()], key)
+      assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
       assert owner_pid == self()
-    end
-
-    test "doesn't change the state if the function returns nil and there is no owner",
-         %{key: key} do
-      assert NimbleOwnership.get_and_update(@server, self(), key, fn nil -> nil end) == nil
-      assert :error = NimbleOwnership.get_owner(@server, [self()], key)
     end
 
     test "updates the metadata with the returned value from the function", %{key: key} do
@@ -44,22 +38,19 @@ defmodule NimbleOwnershipTest do
 
       assert :ok =
                NimbleOwnership.get_and_update(@server, test_pid, key, fn info ->
-                 assert info == {test_pid, %{counter: 1}}
+                 assert info == %{counter: 1}
                  {:ok, %{counter: 2}}
                end)
 
-      assert NimbleOwnership.get_owner(@server, [self()], key) ==
-               {:ok, {test_pid, %{counter: 2}}}
+      assert {:ok, ^test_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
+      assert get_meta(test_pid, key) == %{counter: 2}
     end
 
-    test "doesn't update the metadata if the function returns nil, even when the key is already owned",
-         %{key: key} do
-      init_key(self(), key, %{counter: 1})
-
-      assert NimbleOwnership.get_and_update(@server, self(), key, fn _info -> nil end) == nil
-
-      assert NimbleOwnership.get_owner(@server, [self()], key) ==
-               {:ok, {self(), %{counter: 1}}}
+    defp get_meta(owner, key) do
+      NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
+        assert meta != nil
+        {meta, meta}
+      end)
     end
 
     test "raises an error if the callback function returns an invalid value", %{key: key} do
@@ -108,11 +99,11 @@ defmodule NimbleOwnershipTest do
             Task.start_link(fn ->
               receive do
                 :go ->
-                  assert {:ok, {owner_pid, _meta}} =
-                           NimbleOwnership.get_owner(@server, callers(), key)
+                  assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers(), key)
+                  assert owner_pid == parent_pid
 
                   NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
-                    assert info == {parent_pid, %{counter: 1}}
+                    assert info == %{counter: 1}
                     {:ok, %{counter: 2}}
                   end)
 
@@ -137,7 +128,8 @@ defmodule NimbleOwnershipTest do
       send(child2_pid, :go)
       assert_receive :done
 
-      assert NimbleOwnership.get_owner(@server, [self()], key) == {:ok, {self(), %{counter: 2}}}
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert get_meta(self(), key) == %{counter: 2}
     end
 
     test "supports lazy allowed PIDs that resolve on the next upsert", %{key: key} do
@@ -159,11 +151,11 @@ defmodule NimbleOwnershipTest do
         Task.start_link(fn ->
           receive do
             :go ->
-              assert {:ok, {owner_pid, _meta}} =
-                       NimbleOwnership.get_owner(@server, callers(), key)
+              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers(), key)
+              assert owner_pid == parent_pid
 
               NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
-                assert info == {parent_pid, %{counter: 1}}
+                assert info == %{counter: 1}
                 {:ok, %{counter: 2}}
               end)
 
@@ -176,7 +168,8 @@ defmodule NimbleOwnershipTest do
       send(lazy_pid, :go)
       assert_receive :done
 
-      assert NimbleOwnership.get_owner(@server, [self()], key) == {:ok, {self(), %{counter: 2}}}
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert get_meta(self(), key) == %{counter: 2}
     end
 
     test "is idempotent", %{key: key} do
@@ -206,7 +199,7 @@ defmodule NimbleOwnershipTest do
       Process.exit(owner_pid, :kill)
       assert_receive {:DOWN, ^monitor_ref, _, _, _}
 
-      assert :error = NimbleOwnership.get_owner(@server, [child_pid, owner_pid], key)
+      assert :error = NimbleOwnership.fetch_owner(@server, [child_pid, owner_pid], key)
     end
   end
 

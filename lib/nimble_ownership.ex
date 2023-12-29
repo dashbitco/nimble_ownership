@@ -30,12 +30,12 @@ defmodule NimbleOwnership do
   through `start_link/1` or `child_spec/1`.
 
   Then, you can allow a process access to a key through `allow/5`. You can then check
-  if a PID can access the given key through `get_owner/3`.
+  if a PID can access the given key through `fetch_owner/3`.
 
   ### Metadata
 
   You can store arbitrary metadata (`t:metadata/0`) alongside each **owned resource**.
-  This metadata is returned together with the owner PID when you call `get_owner/3`.
+  This metadata is returned together with the owner PID when you call `fetch_owner/3`.
   """
 
   use GenServer
@@ -50,14 +50,6 @@ defmodule NimbleOwnership do
 
   @typedoc "Arbitrary metadata associated with an owned `t:key/0`."
   @type metadata() :: term()
-
-  @typedoc """
-  Information about the owner of a key.
-
-  This is returned by `get_owner/3` and passed to the callback function in
-  `get_and_update/4`.
-  """
-  @type owner_info() :: {owner_pid :: pid(), metadata()}
 
   @genserver_opts [
     :name,
@@ -104,8 +96,8 @@ defmodule NimbleOwnership do
       :ok
       iex> NimbleOwnership.allow(server, self(), pid, :my_key)
       :ok
-      iex> NimbleOwnership.get_owner(server, [pid], :my_key)
-      {:ok, {self(), %{}}}
+      iex> NimbleOwnership.fetch_owner(server, [pid], :my_key)
+      {:ok, self()}
 
   """
   @spec allow(server(), pid(), pid() | (-> pid()), key()) ::
@@ -141,13 +133,13 @@ defmodule NimbleOwnership do
   If you don't directly have access to the owner PID, but you want to update the metadata
   associated with the owner PID and `key` *from an allowed process*, do this instead:
 
-    1. Fetch the owner of `key` through `get_owner/3`.
+    1. Fetch the owner of `key` through `fetch_owner/3`.
     2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
        function that returns the new metadata.
 
   """
   @spec get_and_update(server(), pid(), key(), fun) :: get_value | nil
-        when fun: (nil | owner_info() -> {get_value, updated_metadata :: metadata()} | nil),
+        when fun: (nil | metadata() -> {get_value, updated_metadata :: metadata()}),
              get_value: term()
   def get_and_update(ownership_server, owner_pid, key, fun)
       when is_pid(owner_pid) and is_function(fun, 1) do
@@ -169,10 +161,10 @@ defmodule NimbleOwnership do
 
   For usage examples, see `allow/4`.
   """
-  @spec get_owner(server(), [pid(), ...], key()) :: {:ok, owner_info()} | {:error, reason}
+  @spec fetch_owner(server(), [pid(), ...], key()) :: {:ok, owner :: pid()} | {:error, reason}
         when reason: Error.t()
-  def get_owner(ownership_server, [_ | _] = callers, key) do
-    GenServer.call(ownership_server, {:get_owner, callers, key})
+  def fetch_owner(ownership_server, [_ | _] = callers, key) do
+    GenServer.call(ownership_server, {:fetch_owner, callers, key})
   end
 
   ## State
@@ -252,14 +244,7 @@ defmodule NimbleOwnership do
   def handle_call({:get_and_update, owner_pid, key, fun}, _from, %__MODULE__{} = state) do
     state = revalidate_lazy_calls(state)
 
-    owner_info =
-      if meta = state.owners[owner_pid][key] do
-        {owner_pid, meta}
-      else
-        nil
-      end
-
-    case fun.(owner_info) do
+    case fun.(_meta_or_nil = state.owners[owner_pid][key]) do
       {get_value, new_meta} ->
         state = put_in(state, [Access.key!(:owners), Access.key(owner_pid, %{}), key], new_meta)
 
@@ -275,9 +260,6 @@ defmodule NimbleOwnership do
 
         {:reply, {:ok, get_value}, state}
 
-      nil ->
-        {:reply, {:ok, nil}, state}
-
       other ->
         message = """
         invalid return value from callback function. Expected nil or a tuple of the form \
@@ -288,20 +270,14 @@ defmodule NimbleOwnership do
     end
   end
 
-  def handle_call({:get_owner, callers, key}, _from, %__MODULE__{} = state) do
+  def handle_call({:fetch_owner, callers, key}, _from, %__MODULE__{} = state) do
     state = revalidate_lazy_calls(state)
 
     Enum.find_value(callers, {:reply, :error, state}, fn caller ->
       cond do
-        owner_pid = state.allowances[caller][key] ->
-          meta = state.owners[owner_pid][key]
-          {:reply, {:ok, {owner_pid, meta}}, state}
-
-        meta = state.owners[caller][key] ->
-          {:reply, {:ok, {caller, meta}}, state}
-
-        true ->
-          nil
+        owner_pid = state.allowances[caller][key] -> {:reply, {:ok, owner_pid}, state}
+        _meta = state.owners[caller][key] -> {:reply, {:ok, caller}, state}
+        true -> nil
       end
     end)
   end
