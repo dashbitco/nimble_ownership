@@ -182,6 +182,23 @@ defmodule NimbleOwnershipTest do
     end
   end
 
+  describe "get_owned/3" do
+    test "returns all the owned keys + metadata for the given PID", %{key: key} do
+      init_key(self(), :"#{key}_1", 1)
+      init_key(self(), :"#{key}_2", 2)
+
+      assert NimbleOwnership.get_owned(@server, self()) == %{
+               :"#{key}_1" => 1,
+               :"#{key}_2" => 2
+             }
+    end
+
+    test "returns the default value if the PID doesn't own any keys" do
+      ref = make_ref()
+      assert NimbleOwnership.get_owned(@server, self(), ref) == ref
+    end
+  end
+
   describe "monitoring" do
     test "if a PID that owns a key shuts down, it's removed and all the allowances with it",
          %{key: key} do

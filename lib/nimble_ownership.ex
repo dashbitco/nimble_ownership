@@ -167,6 +167,29 @@ defmodule NimbleOwnership do
     GenServer.call(ownership_server, {:fetch_owner, callers, key})
   end
 
+  @doc """
+  Gets all the keys owned by `owner_pid` with all their associated metadata.
+
+  If `owner_pid` doesn't own any keys, then this function returns `default`.
+
+  ## Examples
+
+      iex> owner = spawn(fn -> Process.sleep(:infinity) end)
+      iex> {:ok, server} = NimbleOwnership.start_link()
+      iex> NimbleOwnership.get_and_update(server, owner, :my_key1, fn _ -> {:ok, 1} end)
+      iex> NimbleOwnership.get_and_update(server, owner, :my_key2, fn _ -> {:ok, 2} end)
+      iex> NimbleOwnership.get_owned(server, owner)
+      %{my_key1: 1, my_key2: 2}
+      iex> NimbleOwnership.get_owned(server, self(), :default)
+      :default
+
+  """
+  @spec get_owned(server(), pid(), default) :: %{key() => metadata()} | default
+        when default: term()
+  def get_owned(ownership_server, owner_pid, default \\ nil) when is_pid(owner_pid) do
+    GenServer.call(ownership_server, {:get_owned, owner_pid, default})
+  end
+
   ## State
 
   # This is here only for documentation and for understanding the shape of the state.
@@ -203,6 +226,11 @@ defmodule NimbleOwnership do
   def handle_call(call, from, state)
 
   def handle_call({:allow, pid_with_access, pid_to_allow, key}, _from, %__MODULE__{} = state) do
+    if state.owners[pid_to_allow][key] do
+      error = %Error{key: key, reason: :already_an_owner}
+      throw({:reply, {:error, error}, state})
+    end
+
     owner_pid =
       cond do
         owner_pid = state.allowances[pid_with_access][key] ->
@@ -244,6 +272,10 @@ defmodule NimbleOwnership do
   def handle_call({:get_and_update, owner_pid, key, fun}, _from, %__MODULE__{} = state) do
     state = revalidate_lazy_calls(state)
 
+    if other_owner = state.allowances[owner_pid][key] do
+      throw({:reply, {:error, %Error{key: key, reason: {:already_allowed, other_owner}}}, state})
+    end
+
     case fun.(_meta_or_nil = state.owners[owner_pid][key]) do
       {get_value, new_meta} ->
         state = put_in(state, [Access.key!(:owners), Access.key(owner_pid, %{}), key], new_meta)
@@ -280,6 +312,10 @@ defmodule NimbleOwnership do
         true -> nil
       end
     end)
+  end
+
+  def handle_call({:get_owned, owner_pid, default}, _from, %__MODULE__{} = state) do
+    {:reply, state.owners[owner_pid] || default, state}
   end
 
   @impl true

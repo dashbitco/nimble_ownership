@@ -4,7 +4,7 @@ defmodule NimbleOwnership.Error do
   """
 
   @type t() :: %__MODULE__{
-          reason: {:already_allowed, pid()} | :not_allowed,
+          reason: {:already_allowed, pid()} | :not_allowed | :already_an_owner,
           key: NimbleOwnership.key()
         }
 
@@ -23,5 +23,9 @@ defmodule NimbleOwnership.Error do
 
   defp format_reason(key, :not_allowed) do
     "this PID is not allowed to access key #{inspect(key)}"
+  end
+
+  defp format_reason(key, :already_an_owner) do
+    "this PID is already an owner of key #{inspect(key)}"
   end
 end
