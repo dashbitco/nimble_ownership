@@ -125,8 +125,6 @@ defmodule NimbleOwnership do
   with that ownership.
 
   When `owner_pid` owns `key`, the value passed to `fun` will be `{owner_pid, metadata}`.
-  If `fun` returns `nil`, then nothing changes in the ownerships and this function returns
-  `nil`.
 
   ### Updating Metadata from an Allowed Process
 
