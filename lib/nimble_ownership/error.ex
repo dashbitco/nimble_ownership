@@ -4,7 +4,12 @@ defmodule NimbleOwnership.Error do
   """
 
   @type t() :: %__MODULE__{
-          reason: {:already_allowed, pid()} | :not_allowed | :already_an_owner,
+          reason:
+            {:already_allowed, pid()}
+            | :not_allowed
+            | :already_an_owner
+            | :cant_allow_in_global_mode
+            | {:not_global_owner, pid()},
           key: NimbleOwnership.key()
         }
 
@@ -27,5 +32,13 @@ defmodule NimbleOwnership.Error do
 
   defp format_reason(key, :already_an_owner) do
     "this PID is already an owner of key #{inspect(key)}"
+  end
+
+  defp format_reason(_key, {:not_global_owner, pid}) do
+    "#{inspect(pid)} is not the global owner, so it cannot update keys"
+  end
+
+  defp format_reason(_key, :cant_allow_in_global_mode) do
+    "cannot allow PIDs in global mode"
   end
 end

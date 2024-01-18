@@ -188,6 +188,22 @@ defmodule NimbleOwnership do
     GenServer.call(ownership_server, {:get_owned, owner_pid, default})
   end
 
+  @doc """
+  TODO
+  """
+  @spec set_mode_to_private(server()) :: :ok
+  def set_mode_to_private(ownership_server) do
+    GenServer.call(ownership_server, {:set_mode, :private})
+  end
+
+  @doc """
+  TODO
+  """
+  @spec set_mode_to_global(server(), pid()) :: :ok
+  def set_mode_to_global(ownership_server, global_owner) when is_pid(global_owner) do
+    GenServer.call(ownership_server, {:set_mode, {:global, global_owner}})
+  end
+
   ## State
 
   # This is here only for documentation and for understanding the shape of the state.
@@ -208,6 +224,7 @@ defmodule NimbleOwnership do
         }
 
   defstruct allowances: %{},
+            mode: :private,
             deps: %{},
             lazy_calls: false,
             owners: %{},
@@ -223,7 +240,20 @@ defmodule NimbleOwnership do
   @impl true
   def handle_call(call, from, state)
 
-  def handle_call({:allow, pid_with_access, pid_to_allow, key}, _from, %__MODULE__{} = state) do
+  def handle_call(
+        {:allow, _pid_with_access, _pid_to_allow, key},
+        _from,
+        %__MODULE__{mode: {:global, _global_owner}} = state
+      ) do
+    error = %Error{key: key, reason: :cant_allow_in_global_mode}
+    {:reply, {:error, error}, state}
+  end
+
+  def handle_call(
+        {:allow, pid_with_access, pid_to_allow, key},
+        _from,
+        %__MODULE__{mode: :private} = state
+      ) do
     if state.owners[pid_to_allow][key] do
       error = %Error{key: key, reason: :already_an_owner}
       throw({:reply, {:error, error}, state})
@@ -270,6 +300,15 @@ defmodule NimbleOwnership do
   def handle_call({:get_and_update, owner_pid, key, fun}, _from, %__MODULE__{} = state) do
     state = revalidate_lazy_calls(state)
 
+    case state.mode do
+      {:global, global_owner_pid} when global_owner_pid != owner_pid ->
+        error = %Error{key: key, reason: {:not_global_owner, global_owner_pid}}
+        throw({:reply, {:error, error}, state})
+
+      _ ->
+        :ok
+    end
+
     if other_owner = state.allowances[owner_pid][key] do
       throw({:reply, {:error, %Error{key: key, reason: {:already_allowed, other_owner}}}, state})
     end
@@ -314,6 +353,16 @@ defmodule NimbleOwnership do
 
   def handle_call({:get_owned, owner_pid, default}, _from, %__MODULE__{} = state) do
     {:reply, state.owners[owner_pid] || default, state}
+  end
+
+  def handle_call({:set_mode, {:global, global_owner_pid}}, _from, %__MODULE__{} = state) do
+    state = maybe_add_and_monitor_pid(state, global_owner_pid, :DOWN, & &1)
+    state = %__MODULE__{state | mode: {:global, global_owner_pid}}
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:set_mode, :private}, _from, %__MODULE__{} = state) do
+    {:reply, :ok, %__MODULE__{state | mode: :private}}
   end
 
   @impl true
@@ -405,6 +454,6 @@ defmodule NimbleOwnership do
         {pid, {fun, deps}}
       end)
 
-    %{state | deps: deps, allowances: Map.new(allowances), lazy_calls: lazy_calls}
+    %__MODULE__{state | deps: deps, allowances: Map.new(allowances), lazy_calls: lazy_calls}
   end
 end

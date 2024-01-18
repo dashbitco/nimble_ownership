@@ -46,17 +46,62 @@ defmodule NimbleOwnershipTest do
       assert get_meta(test_pid, key) == %{counter: 2}
     end
 
-    defp get_meta(owner, key) do
-      NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
-        assert meta != nil
-        {meta, meta}
-      end)
-    end
-
     test "raises an error if the callback function returns an invalid value", %{key: key} do
       assert_raise ArgumentError, ~r"invalid return value from callback function", fn ->
         NimbleOwnership.get_and_update(@server, self(), key, fn nil -> :invalid_return end)
       end
+    end
+
+    test "can set and update keys in global mode", %{key: key} do
+      NimbleOwnership.set_mode_to_global(@server, self())
+
+      NimbleOwnership.get_and_update(@server, self(), key, fn value ->
+        assert value == nil
+        {:ok, 1}
+      end)
+
+      NimbleOwnership.get_and_update(@server, self(), key, fn value ->
+        assert value == 1
+        {:ok, 2}
+      end)
+    end
+
+    test "supports going to global mode and then back to private mode", %{key: key} do
+      assert :ok = NimbleOwnership.set_mode_to_global(@server, self())
+
+      init_key(self(), key, _meta = 1)
+
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+
+      assert :ok = NimbleOwnership.set_mode_to_private(@server)
+
+      other_owner_pid1 = spawn(fn -> Process.sleep(:infinity) end)
+      other_owner_pid2 = spawn(fn -> Process.sleep(:infinity) end)
+
+      init_key(other_owner_pid1, key, _meta = :one)
+      init_key(other_owner_pid2, key, _meta = :two)
+
+      # The global owner is still the owner of that particular key.
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+
+      assert NimbleOwnership.fetch_owner(@server, [other_owner_pid1], key) ==
+               {:ok, other_owner_pid1}
+
+      assert NimbleOwnership.fetch_owner(@server, [other_owner_pid2], key) ==
+               {:ok, other_owner_pid2}
+    end
+
+    test "raises if trying to insert a new owner in global mode", %{key: key} do
+      NimbleOwnership.set_mode_to_global(@server, self())
+
+      task =
+        Task.async(fn ->
+          assert_raise Error, ~r/is not the global owner, so it cannot update keys/, fn ->
+            NimbleOwnership.get_and_update(@server, self(), key, fn _ -> {:ok, %{}} end)
+          end
+        end)
+
+      Task.await(task)
     end
   end
 
@@ -180,6 +225,14 @@ defmodule NimbleOwnershipTest do
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
     end
+
+    test "returns an error if called in global mode", %{key: key} do
+      NimbleOwnership.set_mode_to_global(@server, self())
+
+      assert {:error, error} = NimbleOwnership.allow(@server, self(), self(), key)
+      assert error == %Error{reason: :cant_allow_in_global_mode, key: key}
+      assert Exception.message(error) =~ "cannot allow PIDs in global mode"
+    end
   end
 
   describe "get_owned/3" do
@@ -196,6 +249,22 @@ defmodule NimbleOwnershipTest do
     test "returns the default value if the PID doesn't own any keys" do
       ref = make_ref()
       assert NimbleOwnership.get_owned(@server, self(), ref) == ref
+    end
+
+    test "returns all the owned keys + metadata for the owner PID in global mode", %{key: key} do
+      NimbleOwnership.set_mode_to_global(@server, self())
+      owner_pid = self()
+
+      init_key(owner_pid, :"#{key}_1", 1)
+      init_key(owner_pid, :"#{key}_2", 2)
+
+      expected_result = %{:"#{key}_1" => 1, :"#{key}_2" => 2}
+
+      assert NimbleOwnership.get_owned(@server, owner_pid) == expected_result
+
+      # Also works from a different PID.
+      task = Task.async(fn -> NimbleOwnership.get_owned(@server, owner_pid) end)
+      assert Task.await(task) == expected_result
     end
   end
 
@@ -226,5 +295,12 @@ defmodule NimbleOwnershipTest do
 
   defp init_key(owner, key, meta) do
     assert :ok = NimbleOwnership.get_and_update(@server, owner, key, fn nil -> {:ok, meta} end)
+  end
+
+  defp get_meta(owner, key) do
+    NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
+      assert meta != nil
+      {meta, meta}
+    end)
   end
 end
