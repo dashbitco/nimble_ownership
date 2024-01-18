@@ -22,10 +22,10 @@ defmodule NimbleOwnershipTest do
 
   describe "get_and_update/4" do
     test "inserts a new owner when there is no owner for the given key", %{key: key} do
-      assert :ok =
+      assert {:ok, :yeah} =
                NimbleOwnership.get_and_update(@server, self(), key, fn arg ->
                  assert arg == nil
-                 {:ok, %{counter: 1}}
+                 {:yeah, %{counter: 1}}
                end)
 
       assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
@@ -36,10 +36,10 @@ defmodule NimbleOwnershipTest do
       test_pid = self()
       init_key(test_pid, key, %{counter: 1})
 
-      assert :ok =
+      assert {:ok, :yeah} =
                NimbleOwnership.get_and_update(@server, test_pid, key, fn info ->
                  assert info == %{counter: 1}
-                 {:ok, %{counter: 2}}
+                 {:yeah, %{counter: 2}}
                end)
 
       assert {:ok, ^test_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
@@ -50,6 +50,26 @@ defmodule NimbleOwnershipTest do
       assert_raise ArgumentError, ~r"invalid return value from callback function", fn ->
         NimbleOwnership.get_and_update(@server, self(), key, fn nil -> :invalid_return end)
       end
+    end
+
+    test "returns an error if PID A allows PID X, PID B allows PID X, and PID X tries to update",
+         %{key: key} do
+      owner_pid1 = spawn(fn -> Process.sleep(:infinity) end)
+      owner_pid2 = spawn(fn -> Process.sleep(:infinity) end)
+
+      init_key(owner_pid1, :"#{key}_1", 1)
+      init_key(owner_pid2, :"#{key}_2", 2)
+
+      assert :ok = NimbleOwnership.allow(@server, owner_pid1, self(), :"#{key}_1")
+      assert :ok = NimbleOwnership.allow(@server, owner_pid2, self(), :"#{key}_2")
+
+      assert {:error, error} =
+               NimbleOwnership.get_and_update(@server, self(), :"#{key}_1", fn _ ->
+                 {:yeah, %{}}
+               end)
+
+      assert error == %Error{reason: {:already_allowed, owner_pid1}, key: :"#{key}_1"}
+      assert Exception.message(error) =~ "this PID is already allowed to access key"
     end
 
     test "can set and update keys in global mode", %{key: key} do
@@ -91,17 +111,17 @@ defmodule NimbleOwnershipTest do
                {:ok, other_owner_pid2}
     end
 
-    test "raises if trying to insert a new owner in global mode", %{key: key} do
+    test "returns an error if trying to insert a new owner in global mode", %{key: key} do
       NimbleOwnership.set_mode_to_global(@server, self())
 
       task =
         Task.async(fn ->
-          assert_raise Error, ~r/is not the global owner, so it cannot update keys/, fn ->
-            NimbleOwnership.get_and_update(@server, self(), key, fn _ -> {:ok, %{}} end)
-          end
+          NimbleOwnership.get_and_update(@server, self(), key, fn _ -> {:ok, %{}} end)
         end)
 
-      Task.await(task)
+      assert {:error, error} = Task.await(task)
+      assert error == %Error{reason: {:not_global_owner, self()}, key: key}
+      assert Exception.message(error) =~ "is not the global owner, so it cannot update keys"
     end
   end
 
@@ -294,13 +314,17 @@ defmodule NimbleOwnershipTest do
   end
 
   defp init_key(owner, key, meta) do
-    assert :ok = NimbleOwnership.get_and_update(@server, owner, key, fn nil -> {:ok, meta} end)
+    assert {:ok, :ok} =
+             NimbleOwnership.get_and_update(@server, owner, key, fn nil -> {:ok, meta} end)
   end
 
   defp get_meta(owner, key) do
-    NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
-      assert meta != nil
-      {meta, meta}
-    end)
+    assert {:ok, meta} =
+             NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
+               assert meta != nil
+               {meta, meta}
+             end)
+
+    meta
   end
 end

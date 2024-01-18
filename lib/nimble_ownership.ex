@@ -92,8 +92,8 @@ defmodule NimbleOwnership do
 
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
       iex> {:ok, server} = NimbleOwnership.start_link()
-      iex> NimbleOwnership.get_and_update(server, self(), :my_key, fn _ -> {:ok, _meta = %{}} end)
-      :ok
+      iex> NimbleOwnership.get_and_update(server, self(), :my_key, fn _ -> {:updated, _meta = %{}} end)
+      {:ok, :updated}
       iex> NimbleOwnership.allow(server, self(), pid, :my_key)
       :ok
       iex> NimbleOwnership.fetch_owner(server, [pid], :my_key)
@@ -112,17 +112,15 @@ defmodule NimbleOwnership do
 
   Use this function for these purposes:
 
-    * to initialize the ownership of a key
-    * to access the metadata associated with a key
-    * to update the metadata associated with a key
+  * to initialize the ownership of a key
+  * to access the metadata associated with a key
+  * to update the metadata associated with a key
 
   ## Usage
 
   When `owner_pid` doesn't own `key`, the value passed to `fun` will be `nil`.
-  If `fun` returns `nil`, then the ownership of `key` will not be initialized
-  and this function will return `nil` itself. If `fun` returns `{get_value, new_meta}`,
-  then `owner_pid` will start owning `key` and `new_meta` will be the metadata associated
-  with that ownership.
+  When `fun` returns `{get_value, new_meta}`, then `owner_pid` will start owning
+  `key` and `new_meta` will be the metadata associated with that ownership.
 
   When `owner_pid` owns `key`, the value passed to `fun` will be `{owner_pid, metadata}`.
 
@@ -131,19 +129,21 @@ defmodule NimbleOwnership do
   If you don't directly have access to the owner PID, but you want to update the metadata
   associated with the owner PID and `key` *from an allowed process*, do this instead:
 
-    1. Fetch the owner of `key` through `fetch_owner/3`.
-    2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
-       function that returns the new metadata.
+  1. Fetch the owner of `key` through `fetch_owner/3`.
+  2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
+  function that returns the new metadata.
 
   """
-  @spec get_and_update(server(), pid(), key(), fun) :: get_value | nil
+  #  TODO: update docs with new return values.
+  @spec get_and_update(server(), pid(), key(), fun) :: {:ok, get_value} | {:error, Error.t()}
         when fun: (nil | metadata() -> {get_value, updated_metadata :: metadata()}),
              get_value: term()
   def get_and_update(ownership_server, owner_pid, key, fun)
       when is_pid(owner_pid) and is_function(fun, 1) do
     case GenServer.call(ownership_server, {:get_and_update, owner_pid, key, fun}) do
-      {:ok, get_value} -> get_value
-      {:error, error} when is_exception(error) -> raise error
+      {:ok, get_value} -> {:ok, get_value}
+      {:error, %Error{} = error} -> {:error, error}
+      {:__raise__, error} when is_exception(error) -> raise error
     end
   end
 
@@ -335,7 +335,7 @@ defmodule NimbleOwnership do
         {get_value, update_value} (see the function's @spec), instead got: #{inspect(other)}\
         """
 
-        {:reply, {:error, %ArgumentError{message: message}}, state}
+        {:reply, {:__raise__, %ArgumentError{message: message}}, state}
     end
   end
 
