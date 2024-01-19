@@ -36,6 +36,20 @@ defmodule NimbleOwnership do
 
   You can store arbitrary metadata (`t:metadata/0`) alongside each **owned resource**.
   This metadata is returned together with the owner PID when you call `fetch_owner/3`.
+
+  ## Modes
+
+  The ownership server can be in one of two modes:
+
+    * **private** (the default): in this mode, you can only allow access to a key through
+      the owner PID or PIDs that are already allowed to access the key. You can allow PIDs
+      through `allow/4`. This mode is useful when you want to track ownership of resources
+      in concurrent environments (such as in a test suite).
+
+    * **global**: in this mode, there is only one *global owner PID* that owns all the keys
+      in the ownership server. Any other PID can read the metadata associated with any key,
+      but it cannot update the metadata (only the global owner can).
+
   """
 
   use GenServer
@@ -112,29 +126,36 @@ defmodule NimbleOwnership do
 
   Use this function for these purposes:
 
-  * to initialize the ownership of a key
-  * to access the metadata associated with a key
-  * to update the metadata associated with a key
+    * to initialize the ownership of a key
+    * to update the metadata associated with a key
 
   ## Usage
 
-  When `owner_pid` doesn't own `key`, the value passed to `fun` will be `nil`.
-  When `fun` returns `{get_value, new_meta}`, then `owner_pid` will start owning
-  `key` and `new_meta` will be the metadata associated with that ownership.
+  When `owner_pid` doesn't own `key`, the value passed to `fun` will be `nil`. Otherwise,
+  it will be the current metadata associated with `key` under the owner `owner_pid`.
 
-  When `owner_pid` owns `key`, the value passed to `fun` will be `{owner_pid, metadata}`.
+  `fun` must return `{get_value, new_meta}`. `owner_pid` will start owning
+  `key` and `new_meta` will be the metadata associated with that ownership, or,
+  in case `owner_pid` already owned `key`, then the metadata is updated to `new_meta`.
+
+  If this function is successful, the return value is `{:ok, get_value}` where `get_value`
+  is the value returned by `fun` in its return tuple. Otherwise, the return value is
+  `{:error, reason}` (see also `NimbleOwnership.Error`).
 
   ### Updating Metadata from an Allowed Process
 
   If you don't directly have access to the owner PID, but you want to update the metadata
   associated with the owner PID and `key` *from an allowed process*, do this instead:
 
-  1. Fetch the owner of `key` through `fetch_owner/3`.
-  2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
-  function that returns the new metadata.
+    1. Fetch the owner of `key` through `fetch_owner/3`.
+    2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
+       function that returns the new metadata.
 
+  ### Global Mode
+
+  When the ownership server is set to **global mode**, you can only call this function
+  with `owner_pid` set to the global owner PID. See [the module documentation](#module-modes).
   """
-  #  TODO: update docs with new return values.
   @spec get_and_update(server(), pid(), key(), fun) :: {:ok, get_value} | {:error, Error.t()}
         when fun: (nil | metadata() -> {get_value, updated_metadata :: metadata()}),
              get_value: term()
@@ -189,7 +210,9 @@ defmodule NimbleOwnership do
   end
 
   @doc """
-  TODO
+  Sets the ownership server to *private mode*.
+
+  See [the module documentation](#module-modes) for more information.
   """
   @spec set_mode_to_private(server()) :: :ok
   def set_mode_to_private(ownership_server) do
@@ -197,7 +220,9 @@ defmodule NimbleOwnership do
   end
 
   @doc """
-  TODO
+  Sets the ownership server to *global mode* and sets `global_owner` as the global owner.
+
+  See [the module documentation](#module-modes) for more information.
   """
   @spec set_mode_to_global(server(), pid()) :: :ok
   def set_mode_to_global(ownership_server, global_owner) when is_pid(global_owner) do
