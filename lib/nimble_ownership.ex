@@ -46,7 +46,7 @@ defmodule NimbleOwnership do
       through `allow/4`. This mode is useful when you want to track ownership of resources
       in concurrent environments (such as in a test suite).
 
-    * **global**: in this mode, there is only one *global owner PID* that owns all the keys
+    * **shared**: in this mode, there is only one *global owner PID* that owns all the keys
       in the ownership server. Any other PID can read the metadata associated with any key,
       but it cannot update the metadata (only the global owner can).
 
@@ -151,9 +151,9 @@ defmodule NimbleOwnership do
     2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
        function that returns the new metadata.
 
-  ### Global Mode
+  ### Shared Mode
 
-  When the ownership server is set to **global mode**, you can only call this function
+  When the ownership server is set to **shared mode**, you can only call this function
   with `owner_pid` set to the global owner PID. See [the module documentation](#module-modes).
   """
   @spec get_and_update(server(), pid(), key(), fun) :: {:ok, get_value} | {:error, Error.t()}
@@ -220,13 +220,13 @@ defmodule NimbleOwnership do
   end
 
   @doc """
-  Sets the ownership server to *global mode* and sets `global_owner` as the global owner.
+  Sets the ownership server to *shared mode* and sets `global_owner` as the global owner.
 
   See [the module documentation](#module-modes) for more information.
   """
-  @spec set_mode_to_global(server(), pid()) :: :ok
-  def set_mode_to_global(ownership_server, global_owner) when is_pid(global_owner) do
-    GenServer.call(ownership_server, {:set_mode, {:global, global_owner}})
+  @spec set_mode_to_shared(server(), pid()) :: :ok
+  def set_mode_to_shared(ownership_server, global_owner) when is_pid(global_owner) do
+    GenServer.call(ownership_server, {:set_mode, {:shared, global_owner}})
   end
 
   ## State
@@ -268,9 +268,9 @@ defmodule NimbleOwnership do
   def handle_call(
         {:allow, _pid_with_access, _pid_to_allow, key},
         _from,
-        %__MODULE__{mode: {:global, _global_owner}} = state
+        %__MODULE__{mode: {:shared, _global_owner}} = state
       ) do
-    error = %Error{key: key, reason: :cant_allow_in_global_mode}
+    error = %Error{key: key, reason: :cant_allow_in_shared_mode}
     {:reply, {:error, error}, state}
   end
 
@@ -326,7 +326,7 @@ defmodule NimbleOwnership do
     state = revalidate_lazy_calls(state)
 
     case state.mode do
-      {:global, global_owner_pid} when global_owner_pid != owner_pid ->
+      {:shared, global_owner_pid} when global_owner_pid != owner_pid ->
         error = %Error{key: key, reason: {:not_global_owner, global_owner_pid}}
         throw({:reply, {:error, error}, state})
 
@@ -364,7 +364,15 @@ defmodule NimbleOwnership do
     end
   end
 
-  def handle_call({:fetch_owner, callers, key}, _from, %__MODULE__{} = state) do
+  def handle_call(
+        {:fetch_owner, _callers, _key},
+        _from,
+        %__MODULE__{mode: {:shared, global_owner_pid}} = state
+      ) do
+    {:reply, {:ok, global_owner_pid}, state}
+  end
+
+  def handle_call({:fetch_owner, callers, key}, _from, %__MODULE__{mode: :private} = state) do
     state = revalidate_lazy_calls(state)
 
     Enum.find_value(callers, {:reply, :error, state}, fn caller ->
@@ -380,9 +388,9 @@ defmodule NimbleOwnership do
     {:reply, state.owners[owner_pid] || default, state}
   end
 
-  def handle_call({:set_mode, {:global, global_owner_pid}}, _from, %__MODULE__{} = state) do
+  def handle_call({:set_mode, {:shared, global_owner_pid}}, _from, %__MODULE__{} = state) do
     state = maybe_add_and_monitor_pid(state, global_owner_pid, :DOWN, & &1)
-    state = %__MODULE__{state | mode: {:global, global_owner_pid}}
+    state = %__MODULE__{state | mode: {:shared, global_owner_pid}}
     {:reply, :ok, state}
   end
 

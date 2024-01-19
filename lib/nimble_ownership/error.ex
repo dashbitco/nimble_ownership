@@ -8,7 +8,7 @@ defmodule NimbleOwnership.Error do
             {:already_allowed, pid()}
             | :not_allowed
             | :already_an_owner
-            | :cant_allow_in_global_mode
+            | :cant_allow_in_shared_mode
             | {:not_global_owner, pid()},
           key: NimbleOwnership.key()
         }
@@ -38,7 +38,7 @@ defmodule NimbleOwnership.Error do
     "#{inspect(pid)} is not the global owner, so it cannot update keys"
   end
 
-  defp format_reason(_key, :cant_allow_in_global_mode) do
-    "cannot allow PIDs in global mode"
+  defp format_reason(_key, :cant_allow_in_shared_mode) do
+    "cannot allow PIDs in shared mode"
   end
 end

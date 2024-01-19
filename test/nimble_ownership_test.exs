@@ -72,8 +72,8 @@ defmodule NimbleOwnershipTest do
       assert Exception.message(error) =~ "this PID is already allowed to access key"
     end
 
-    test "can set and update keys in global mode", %{key: key} do
-      NimbleOwnership.set_mode_to_global(@server, self())
+    test "can set and update keys in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
 
       NimbleOwnership.get_and_update(@server, self(), key, fn value ->
         assert value == nil
@@ -86,8 +86,8 @@ defmodule NimbleOwnershipTest do
       end)
     end
 
-    test "supports going to global mode and then back to private mode", %{key: key} do
-      assert :ok = NimbleOwnership.set_mode_to_global(@server, self())
+    test "supports going to shared mode and then back to private mode", %{key: key} do
+      assert :ok = NimbleOwnership.set_mode_to_shared(@server, self())
 
       init_key(self(), key, _meta = 1)
 
@@ -111,8 +111,8 @@ defmodule NimbleOwnershipTest do
                {:ok, other_owner_pid2}
     end
 
-    test "returns an error if trying to insert a new owner in global mode", %{key: key} do
-      NimbleOwnership.set_mode_to_global(@server, self())
+    test "returns an error if trying to insert a new owner in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
 
       task =
         Task.async(fn ->
@@ -246,12 +246,12 @@ defmodule NimbleOwnershipTest do
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
     end
 
-    test "returns an error if called in global mode", %{key: key} do
-      NimbleOwnership.set_mode_to_global(@server, self())
+    test "returns an error if called in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
 
       assert {:error, error} = NimbleOwnership.allow(@server, self(), self(), key)
-      assert error == %Error{reason: :cant_allow_in_global_mode, key: key}
-      assert Exception.message(error) =~ "cannot allow PIDs in global mode"
+      assert error == %Error{reason: :cant_allow_in_shared_mode, key: key}
+      assert Exception.message(error) =~ "cannot allow PIDs in shared mode"
     end
   end
 
@@ -271,8 +271,8 @@ defmodule NimbleOwnershipTest do
       assert NimbleOwnership.get_owned(@server, self(), ref) == ref
     end
 
-    test "returns all the owned keys + metadata for the owner PID in global mode", %{key: key} do
-      NimbleOwnership.set_mode_to_global(@server, self())
+    test "returns all the owned keys + metadata for the owner PID in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
       owner_pid = self()
 
       init_key(owner_pid, :"#{key}_1", 1)
