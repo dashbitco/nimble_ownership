@@ -213,8 +213,9 @@ defmodule NimbleOwnership do
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
       iex> {:ok, server} = NimbleOwnership.start_link()
       iex> NimbleOwnership.set_mode_to_shared(server, pid)
-      iex> NimbleOwnership.fetch_owner(server, [self()], :whatever_key)
-      {:global_owner, pid}
+      iex> {:global_owner, owner_pid} = NimbleOwnership.fetch_owner(server, [self()], :whatever_key)
+      iex> pid == owner_pid
+      true
 
   """
   @spec fetch_owner(server(), [pid(), ...], key(), timeout()) ::
