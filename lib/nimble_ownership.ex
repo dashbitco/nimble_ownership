@@ -29,7 +29,7 @@ defmodule NimbleOwnership do
   To track ownership of resources, you need to start a `NimbleOwnership` server (a process),
   through `start_link/1` or `child_spec/1`.
 
-  Then, you can allow a process access to a key through `allow/5`. You can then check
+  Then, you can allow a process access to a key through `allow/4`. You can then check
   if a PID can access the given key through `fetch_owner/3`.
 
   ### Metadata
@@ -49,6 +49,11 @@ defmodule NimbleOwnership do
     * **shared**: in this mode, there is only one *global owner PID* that owns all the keys
       in the ownership server. Any other PID can read the metadata associated with any key,
       but it cannot update the metadata (only the global owner can).
+
+  > #### Returning to Private Mode {: .warning}
+  >
+  > If the ownership server is in *shared mode* and the global owner process terminates,
+  > the server automatically returns to *private mode*.
 
   """
 
@@ -110,6 +115,16 @@ defmodule NimbleOwnership do
     * When the ownership server is in [**shared mode**](#module-modes). In this case,
       the `:reason` field of the returned `NimbleOwnership.Error` struct is set to
       `:cant_allow_in_shared_mode`.
+
+  > #### Tracking Callers {: .tip}
+  >
+  > The ownership server automatically considers all the direct and indirect "children"
+  > of an owner PID as allowed to access the owner's keys. By children, we mean processes
+  > that have been spawned by the owner PID or by any of its children, which is something
+  > we determine by looking at the `:"$callers"` key in the process dictionary.
+  > This is useful for many standard process kinds. For example, if a process owns a key
+  > and starts a task with `Task.start_link/1`, then the task will be allowed to access
+  > the key without having to explicitly call `allow/4`.
 
   ## Examples
 
