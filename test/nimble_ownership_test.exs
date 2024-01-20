@@ -22,10 +22,10 @@ defmodule NimbleOwnershipTest do
 
   describe "get_and_update/4" do
     test "inserts a new owner when there is no owner for the given key", %{key: key} do
-      assert :ok =
+      assert {:ok, :yeah} =
                NimbleOwnership.get_and_update(@server, self(), key, fn arg ->
                  assert arg == nil
-                 {:ok, %{counter: 1}}
+                 {:yeah, %{counter: 1}}
                end)
 
       assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
@@ -36,27 +36,92 @@ defmodule NimbleOwnershipTest do
       test_pid = self()
       init_key(test_pid, key, %{counter: 1})
 
-      assert :ok =
+      assert {:ok, :yeah} =
                NimbleOwnership.get_and_update(@server, test_pid, key, fn info ->
                  assert info == %{counter: 1}
-                 {:ok, %{counter: 2}}
+                 {:yeah, %{counter: 2}}
                end)
 
       assert {:ok, ^test_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
       assert get_meta(test_pid, key) == %{counter: 2}
     end
 
-    defp get_meta(owner, key) do
-      NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
-        assert meta != nil
-        {meta, meta}
-      end)
-    end
-
     test "raises an error if the callback function returns an invalid value", %{key: key} do
       assert_raise ArgumentError, ~r"invalid return value from callback function", fn ->
         NimbleOwnership.get_and_update(@server, self(), key, fn nil -> :invalid_return end)
       end
+    end
+
+    test "returns an error if PID A allows PID X, PID B allows PID X, and PID X tries to update",
+         %{key: key} do
+      owner_pid1 = spawn(fn -> Process.sleep(:infinity) end)
+      owner_pid2 = spawn(fn -> Process.sleep(:infinity) end)
+
+      init_key(owner_pid1, :"#{key}_1", 1)
+      init_key(owner_pid2, :"#{key}_2", 2)
+
+      assert :ok = NimbleOwnership.allow(@server, owner_pid1, self(), :"#{key}_1")
+      assert :ok = NimbleOwnership.allow(@server, owner_pid2, self(), :"#{key}_2")
+
+      assert {:error, error} =
+               NimbleOwnership.get_and_update(@server, self(), :"#{key}_1", fn _ ->
+                 {:yeah, %{}}
+               end)
+
+      assert error == %Error{reason: {:already_allowed, owner_pid1}, key: :"#{key}_1"}
+      assert Exception.message(error) =~ "this PID is already allowed to access key"
+    end
+
+    test "can set and update keys in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
+
+      NimbleOwnership.get_and_update(@server, self(), key, fn value ->
+        assert value == nil
+        {:ok, 1}
+      end)
+
+      NimbleOwnership.get_and_update(@server, self(), key, fn value ->
+        assert value == 1
+        {:ok, 2}
+      end)
+    end
+
+    test "supports going to shared mode and then back to private mode", %{key: key} do
+      assert :ok = NimbleOwnership.set_mode_to_shared(@server, self())
+
+      init_key(self(), key, _meta = 1)
+
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:shared_owner, self()}
+
+      assert :ok = NimbleOwnership.set_mode_to_private(@server)
+
+      other_owner_pid1 = spawn(fn -> Process.sleep(:infinity) end)
+      other_owner_pid2 = spawn(fn -> Process.sleep(:infinity) end)
+
+      init_key(other_owner_pid1, key, _meta = :one)
+      init_key(other_owner_pid2, key, _meta = :two)
+
+      # The shared owner is still the owner of that particular key.
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+
+      assert NimbleOwnership.fetch_owner(@server, [other_owner_pid1], key) ==
+               {:ok, other_owner_pid1}
+
+      assert NimbleOwnership.fetch_owner(@server, [other_owner_pid2], key) ==
+               {:ok, other_owner_pid2}
+    end
+
+    test "returns an error if trying to insert a new owner in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
+
+      task =
+        Task.async(fn ->
+          NimbleOwnership.get_and_update(@server, self(), key, fn _ -> {:ok, %{}} end)
+        end)
+
+      assert {:error, error} = Task.await(task)
+      assert error == %Error{reason: {:not_shared_owner, self()}, key: key}
+      assert Exception.message(error) =~ "is not the shared owner, so it cannot update keys"
     end
   end
 
@@ -180,6 +245,21 @@ defmodule NimbleOwnershipTest do
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
     end
+
+    test "returns an error if called in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
+
+      assert {:error, error} = NimbleOwnership.allow(@server, self(), self(), key)
+      assert error == %Error{reason: :cant_allow_in_shared_mode, key: key}
+      assert Exception.message(error) =~ "cannot allow PIDs in shared mode"
+    end
+
+    test "returns an error if the PID to allow is already an owner", %{key: key} do
+      init_key(self(), key, :meta)
+      assert {:error, error} = NimbleOwnership.allow(@server, self(), self(), key)
+      assert error == %Error{reason: :already_an_owner, key: key}
+      assert Exception.message(error) =~ "this PID is already an owner of key"
+    end
   end
 
   describe "get_owned/3" do
@@ -196,6 +276,22 @@ defmodule NimbleOwnershipTest do
     test "returns the default value if the PID doesn't own any keys" do
       ref = make_ref()
       assert NimbleOwnership.get_owned(@server, self(), ref) == ref
+    end
+
+    test "returns all the owned keys + metadata for the owner PID in shared mode", %{key: key} do
+      NimbleOwnership.set_mode_to_shared(@server, self())
+      owner_pid = self()
+
+      init_key(owner_pid, :"#{key}_1", 1)
+      init_key(owner_pid, :"#{key}_2", 2)
+
+      expected_result = %{:"#{key}_1" => 1, :"#{key}_2" => 2}
+
+      assert NimbleOwnership.get_owned(@server, owner_pid) == expected_result
+
+      # Also works from a different PID.
+      task = Task.async(fn -> NimbleOwnership.get_owned(@server, owner_pid) end)
+      assert Task.await(task) == expected_result
     end
   end
 
@@ -225,6 +321,17 @@ defmodule NimbleOwnershipTest do
   end
 
   defp init_key(owner, key, meta) do
-    assert :ok = NimbleOwnership.get_and_update(@server, owner, key, fn nil -> {:ok, meta} end)
+    assert {:ok, :ok} =
+             NimbleOwnership.get_and_update(@server, owner, key, fn nil -> {:ok, meta} end)
+  end
+
+  defp get_meta(owner, key) do
+    assert {:ok, meta} =
+             NimbleOwnership.get_and_update(@server, owner, key, fn meta ->
+               assert meta != nil
+               {meta, meta}
+             end)
+
+    meta
   end
 end

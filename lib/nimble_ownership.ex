@@ -29,14 +29,35 @@ defmodule NimbleOwnership do
   To track ownership of resources, you need to start a `NimbleOwnership` server (a process),
   through `start_link/1` or `child_spec/1`.
 
-  Then, you can allow a process access to a key through `allow/5`. You can then check
+  Then, you can allow a process access to a key through `allow/4`. You can then check
   if a PID can access the given key through `fetch_owner/3`.
 
   ### Metadata
 
   You can store arbitrary metadata (`t:metadata/0`) alongside each **owned resource**.
   This metadata is returned together with the owner PID when you call `fetch_owner/3`.
+
+  ## Modes
+
+  The ownership server can be in one of two modes:
+
+    * **private** (the default): in this mode, you can only allow access to a key through
+      the owner PID or PIDs that are already allowed to access the key. You can allow PIDs
+      through `allow/4`. This mode is useful when you want to track ownership of resources
+      in concurrent environments (such as in a test suite).
+
+    * **shared**: in this mode, there is only one *shared owner PID* that owns all the keys
+      in the ownership server. Any other PID can read the metadata associated with any key,
+      but it cannot update the metadata (only the shared owner can).
+
+  > #### Returning to Private Mode {: .warning}
+  >
+  > If the ownership server is in *shared mode* and the shared owner process terminates,
+  > the server automatically returns to *private mode*.
+
   """
+
+  defguardp is_timeout(val) when (is_integer(val) and val > 0) or val == :infinity
 
   use GenServer
 
@@ -85,15 +106,32 @@ defmodule NimbleOwnership do
   Use this function when `owner_pid` is allowed access to `key`, and you want
   to also allow `pid_to_allow` to use `key`.
 
-  This function returns an error when `pid_to_allow` is already allowed to use
-  `key` via **another owner PID** that is not `owner_pid`.
+  This function return an error in the following cases:
+
+    * When `pid_to_allow` is already allowed to use `key` via **another owner PID**
+      that is not `owner_pid`. In this case, the `:reason` field of the returned
+      `NimbleOwnership.Error` struct is set to `{:already_allowed, other_owner_pid}`.
+
+    * When the ownership server is in [**shared mode**](#module-modes). In this case,
+      the `:reason` field of the returned `NimbleOwnership.Error` struct is set to
+      `:cant_allow_in_shared_mode`.
+
+  > #### Tracking Callers {: .tip}
+  >
+  > The ownership server automatically considers all the direct and indirect "children"
+  > of an owner PID as allowed to access the owner's keys. By children, we mean processes
+  > that have been spawned by the owner PID or by any of its children, which is something
+  > we determine by looking at the `:"$callers"` key in the process dictionary.
+  > This is useful for many standard process kinds. For example, if a process owns a key
+  > and starts a task with `Task.start_link/1`, then the task will be allowed to access
+  > the key without having to explicitly call `allow/4`.
 
   ## Examples
 
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
       iex> {:ok, server} = NimbleOwnership.start_link()
-      iex> NimbleOwnership.get_and_update(server, self(), :my_key, fn _ -> {:ok, _meta = %{}} end)
-      :ok
+      iex> NimbleOwnership.get_and_update(server, self(), :my_key, fn _ -> {:updated, _meta = %{}} end)
+      {:ok, :updated}
       iex> NimbleOwnership.allow(server, self(), pid, :my_key)
       :ok
       iex> NimbleOwnership.fetch_owner(server, [pid], :my_key)
@@ -102,9 +140,10 @@ defmodule NimbleOwnership do
   """
   @spec allow(server(), pid(), pid() | (-> pid()), key()) ::
           :ok | {:error, Error.t()}
-  def allow(ownership_server, owner_pid, pid_to_allow, key)
-      when is_pid(owner_pid) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) do
-    GenServer.call(ownership_server, {:allow, owner_pid, pid_to_allow, key})
+  def allow(ownership_server, owner_pid, pid_to_allow, key, timeout \\ 5000)
+      when is_pid(owner_pid) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
+             is_timeout(timeout) do
+    GenServer.call(ownership_server, {:allow, owner_pid, pid_to_allow, key}, timeout)
   end
 
   @doc """
@@ -113,18 +152,20 @@ defmodule NimbleOwnership do
   Use this function for these purposes:
 
     * to initialize the ownership of a key
-    * to access the metadata associated with a key
     * to update the metadata associated with a key
 
   ## Usage
 
-  When `owner_pid` doesn't own `key`, the value passed to `fun` will be `nil`.
-  If `fun` returns `nil`, then the ownership of `key` will not be initialized
-  and this function will return `nil` itself. If `fun` returns `{get_value, new_meta}`,
-  then `owner_pid` will start owning `key` and `new_meta` will be the metadata associated
-  with that ownership.
+  When `owner_pid` doesn't own `key`, the value passed to `fun` will be `nil`. Otherwise,
+  it will be the current metadata associated with `key` under the owner `owner_pid`.
 
-  When `owner_pid` owns `key`, the value passed to `fun` will be `{owner_pid, metadata}`.
+  `fun` must return `{get_value, new_meta}`. `owner_pid` will start owning
+  `key` and `new_meta` will be the metadata associated with that ownership, or,
+  in case `owner_pid` already owned `key`, then the metadata is updated to `new_meta`.
+
+  If this function is successful, the return value is `{:ok, get_value}` where `get_value`
+  is the value returned by `fun` in its return tuple. Otherwise, the return value is
+  `{:error, reason}` (see also `NimbleOwnership.Error`).
 
   ### Updating Metadata from an Allowed Process
 
@@ -135,15 +176,21 @@ defmodule NimbleOwnership do
     2. Call `get_and_update/4` with the owner PID as `owner_pid`, passing in a callback
        function that returns the new metadata.
 
+  ### Shared Mode
+
+  When the ownership server is set to **shared mode**, you can only call this function
+  with `owner_pid` set to the shared owner PID. See [the module documentation](#module-modes).
   """
-  @spec get_and_update(server(), pid(), key(), fun) :: get_value | nil
+  @spec get_and_update(server(), pid(), key(), fun, timeout()) ::
+          {:ok, get_value} | {:error, Error.t()}
         when fun: (nil | metadata() -> {get_value, updated_metadata :: metadata()}),
              get_value: term()
-  def get_and_update(ownership_server, owner_pid, key, fun)
-      when is_pid(owner_pid) and is_function(fun, 1) do
-    case GenServer.call(ownership_server, {:get_and_update, owner_pid, key, fun}) do
-      {:ok, get_value} -> get_value
-      {:error, error} when is_exception(error) -> raise error
+  def get_and_update(ownership_server, owner_pid, key, fun, timeout \\ 5000)
+      when is_pid(owner_pid) and is_function(fun, 1) and is_timeout(timeout) do
+    case GenServer.call(ownership_server, {:get_and_update, owner_pid, key, fun}, timeout) do
+      {:ok, get_value} -> {:ok, get_value}
+      {:error, %Error{} = error} -> {:error, error}
+      {:__raise__, error} when is_exception(error) -> raise error
     end
   end
 
@@ -154,15 +201,31 @@ defmodule NimbleOwnership do
   then this function returns `{:ok, {owner_pid, metadata}}` where `metadata` is the
   metadata associated with the `key` under the owner.
 
+  If the ownership server is in [**shared mode**](#module-modes), then this function
+  returns `{:shared_owner, shared_owner_pid}` where `shared_owner_pid` is the PID of the
+  shared owner. This is regardless of the `callers`.
+
   If none of the callers owns `key` or is allowed access to `key`, then this function
   returns `{:error, reason}`.
 
-  For usage examples, see `allow/4`.
+  ## Examples
+
+      iex> pid = spawn(fn -> Process.sleep(:infinity) end)
+      iex> {:ok, server} = NimbleOwnership.start_link()
+      iex> NimbleOwnership.set_mode_to_shared(server, pid)
+      iex> {:shared_owner, owner_pid} = NimbleOwnership.fetch_owner(server, [self()], :whatever_key)
+      iex> pid == owner_pid
+      true
+
   """
-  @spec fetch_owner(server(), [pid(), ...], key()) :: {:ok, owner :: pid()} | {:error, reason}
+  @spec fetch_owner(server(), [pid(), ...], key(), timeout()) ::
+          {:ok, owner :: pid()}
+          | {:shared_owner, shared_owner :: pid()}
+          | {:error, reason}
         when reason: Error.t()
-  def fetch_owner(ownership_server, [_ | _] = callers, key) do
-    GenServer.call(ownership_server, {:fetch_owner, callers, key})
+  def fetch_owner(ownership_server, [_ | _] = callers, key, timeout \\ 5000)
+      when is_timeout(timeout) do
+    GenServer.call(ownership_server, {:fetch_owner, callers, key}, timeout)
   end
 
   @doc """
@@ -182,10 +245,31 @@ defmodule NimbleOwnership do
       :default
 
   """
-  @spec get_owned(server(), pid(), default) :: %{key() => metadata()} | default
+  @spec get_owned(server(), pid(), default, timeout()) :: %{key() => metadata()} | default
         when default: term()
-  def get_owned(ownership_server, owner_pid, default \\ nil) when is_pid(owner_pid) do
-    GenServer.call(ownership_server, {:get_owned, owner_pid, default})
+  def get_owned(ownership_server, owner_pid, default \\ nil, timeout \\ 5000)
+      when is_pid(owner_pid) and is_timeout(timeout) do
+    GenServer.call(ownership_server, {:get_owned, owner_pid, default}, timeout)
+  end
+
+  @doc """
+  Sets the ownership server to *private mode*.
+
+  See [the module documentation](#module-modes) for more information.
+  """
+  @spec set_mode_to_private(server()) :: :ok
+  def set_mode_to_private(ownership_server) do
+    GenServer.call(ownership_server, {:set_mode, :private})
+  end
+
+  @doc """
+  Sets the ownership server to *shared mode* and sets `shared_owner` as the shared owner.
+
+  See [the module documentation](#module-modes) for more information.
+  """
+  @spec set_mode_to_shared(server(), pid()) :: :ok
+  def set_mode_to_shared(ownership_server, shared_owner) when is_pid(shared_owner) do
+    GenServer.call(ownership_server, {:set_mode, {:shared, shared_owner}})
   end
 
   ## State
@@ -204,10 +288,12 @@ defmodule NimbleOwnership do
           lazy_calls: boolean(),
           deps: %{
             optional(pid() | (-> pid())) => {:DOWN, :process, pid(), term()}
-          }
+          },
+          mode: :private | {:shared, pid()}
         }
 
   defstruct allowances: %{},
+            mode: :private,
             deps: %{},
             lazy_calls: false,
             owners: %{},
@@ -223,7 +309,20 @@ defmodule NimbleOwnership do
   @impl true
   def handle_call(call, from, state)
 
-  def handle_call({:allow, pid_with_access, pid_to_allow, key}, _from, %__MODULE__{} = state) do
+  def handle_call(
+        {:allow, _pid_with_access, _pid_to_allow, key},
+        _from,
+        %__MODULE__{mode: {:shared, _shared_owner}} = state
+      ) do
+    error = %Error{key: key, reason: :cant_allow_in_shared_mode}
+    {:reply, {:error, error}, state}
+  end
+
+  def handle_call(
+        {:allow, pid_with_access, pid_to_allow, key},
+        _from,
+        %__MODULE__{mode: :private} = state
+      ) do
     if state.owners[pid_to_allow][key] do
       error = %Error{key: key, reason: :already_an_owner}
       throw({:reply, {:error, error}, state})
@@ -270,6 +369,15 @@ defmodule NimbleOwnership do
   def handle_call({:get_and_update, owner_pid, key, fun}, _from, %__MODULE__{} = state) do
     state = revalidate_lazy_calls(state)
 
+    case state.mode do
+      {:shared, shared_owner_pid} when shared_owner_pid != owner_pid ->
+        error = %Error{key: key, reason: {:not_shared_owner, shared_owner_pid}}
+        throw({:reply, {:error, error}, state})
+
+      _ ->
+        :ok
+    end
+
     if other_owner = state.allowances[owner_pid][key] do
       throw({:reply, {:error, %Error{key: key, reason: {:already_allowed, other_owner}}}, state})
     end
@@ -296,11 +404,19 @@ defmodule NimbleOwnership do
         {get_value, update_value} (see the function's @spec), instead got: #{inspect(other)}\
         """
 
-        {:reply, {:error, %ArgumentError{message: message}}, state}
+        {:reply, {:__raise__, %ArgumentError{message: message}}, state}
     end
   end
 
-  def handle_call({:fetch_owner, callers, key}, _from, %__MODULE__{} = state) do
+  def handle_call(
+        {:fetch_owner, _callers, _key},
+        _from,
+        %__MODULE__{mode: {:shared, shared_owner_pid}} = state
+      ) do
+    {:reply, {:shared_owner, shared_owner_pid}, state}
+  end
+
+  def handle_call({:fetch_owner, callers, key}, _from, %__MODULE__{mode: :private} = state) do
     state = revalidate_lazy_calls(state)
 
     Enum.find_value(callers, {:reply, :error, state}, fn caller ->
@@ -316,8 +432,22 @@ defmodule NimbleOwnership do
     {:reply, state.owners[owner_pid] || default, state}
   end
 
+  def handle_call({:set_mode, {:shared, shared_owner_pid}}, _from, %__MODULE__{} = state) do
+    state = maybe_add_and_monitor_pid(state, shared_owner_pid, :DOWN, & &1)
+    state = %__MODULE__{state | mode: {:shared, shared_owner_pid}}
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:set_mode, :private}, _from, %__MODULE__{} = state) do
+    {:reply, :ok, %__MODULE__{state | mode: :private}}
+  end
+
   @impl true
   def handle_info(msg, state)
+
+  def handle_info({:DOWN, _, _, down_pid, _}, %__MODULE__{mode: {:shared, down_pid}} = state) do
+    {:noreply, %__MODULE__{state | mode: :private}}
+  end
 
   # An owner went down, so we need to clean up all of its allowances as well as all its keys.
   def handle_info({:DOWN, _, _, down_pid, _}, state) when is_map_key(state.owners, down_pid) do
@@ -405,6 +535,6 @@ defmodule NimbleOwnership do
         {pid, {fun, deps}}
       end)
 
-    %{state | deps: deps, allowances: Map.new(allowances), lazy_calls: lazy_calls}
+    %__MODULE__{state | deps: deps, allowances: Map.new(allowances), lazy_calls: lazy_calls}
   end
 end
