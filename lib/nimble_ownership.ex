@@ -52,11 +52,7 @@ defmodule NimbleOwnership do
 
   > #### Returning to Private Mode {: .warning}
   >
-<<<<<<< Updated upstream
-  > If the ownership server is in *shared mode* and the owner process terminates,
-=======
   > If the ownership server is in *shared mode* and the shared owner process terminates,
->>>>>>> Stashed changes
   > the server automatically returns to *private mode*.
 
   """
