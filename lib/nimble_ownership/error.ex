@@ -9,7 +9,7 @@ defmodule NimbleOwnership.Error do
             | :not_allowed
             | :already_an_owner
             | :cant_allow_in_shared_mode
-            | {:not_global_owner, pid()},
+            | {:not_shared_owner, pid()},
           key: NimbleOwnership.key()
         }
 
@@ -34,8 +34,8 @@ defmodule NimbleOwnership.Error do
     "this PID is already an owner of key #{inspect(key)}"
   end
 
-  defp format_reason(_key, {:not_global_owner, pid}) do
-    "#{inspect(pid)} is not the global owner, so it cannot update keys"
+  defp format_reason(_key, {:not_shared_owner, pid}) do
+    "#{inspect(pid)} is not the shared owner, so it cannot update keys"
   end
 
   defp format_reason(_key, :cant_allow_in_shared_mode) do

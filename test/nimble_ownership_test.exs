@@ -91,7 +91,7 @@ defmodule NimbleOwnershipTest do
 
       init_key(self(), key, _meta = 1)
 
-      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:global_owner, self()}
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:shared_owner, self()}
 
       assert :ok = NimbleOwnership.set_mode_to_private(@server)
 
@@ -101,7 +101,7 @@ defmodule NimbleOwnershipTest do
       init_key(other_owner_pid1, key, _meta = :one)
       init_key(other_owner_pid2, key, _meta = :two)
 
-      # The global owner is still the owner of that particular key.
+      # The shared owner is still the owner of that particular key.
       assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
 
       assert NimbleOwnership.fetch_owner(@server, [other_owner_pid1], key) ==
@@ -120,8 +120,8 @@ defmodule NimbleOwnershipTest do
         end)
 
       assert {:error, error} = Task.await(task)
-      assert error == %Error{reason: {:not_global_owner, self()}, key: key}
-      assert Exception.message(error) =~ "is not the global owner, so it cannot update keys"
+      assert error == %Error{reason: {:not_shared_owner, self()}, key: key}
+      assert Exception.message(error) =~ "is not the shared owner, so it cannot update keys"
     end
   end
 
