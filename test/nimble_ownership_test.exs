@@ -91,7 +91,7 @@ defmodule NimbleOwnershipTest do
 
       init_key(self(), key, _meta = 1)
 
-      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:global_owner, self()}
 
       assert :ok = NimbleOwnership.set_mode_to_private(@server)
 
@@ -252,6 +252,13 @@ defmodule NimbleOwnershipTest do
       assert {:error, error} = NimbleOwnership.allow(@server, self(), self(), key)
       assert error == %Error{reason: :cant_allow_in_shared_mode, key: key}
       assert Exception.message(error) =~ "cannot allow PIDs in shared mode"
+    end
+
+    test "returns an error if the PID to allow is already an owner", %{key: key} do
+      init_key(self(), key, :meta)
+      assert {:error, error} = NimbleOwnership.allow(@server, self(), self(), key)
+      assert error == %Error{reason: :already_an_owner, key: key}
+      assert Exception.message(error) =~ "this PID is already an owner of key"
     end
   end
 
