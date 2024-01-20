@@ -52,7 +52,7 @@ defmodule NimbleOwnership do
 
   > #### Returning to Private Mode {: .warning}
   >
-  > If the ownership server is in *shared mode* and the global owner process terminates,
+  > If the ownership server is in *shared mode* and the owner process terminates,
   > the server automatically returns to *private mode*.
 
   """
