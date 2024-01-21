@@ -1,7 +1,7 @@
 defmodule NimbleOwnership.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   @repo "https://github.com/dashbitco/nimble_ownership"
 
   def project do
