@@ -217,12 +217,15 @@ defmodule NimbleOwnership do
       iex> pid == owner_pid
       true
 
+      iex> {:ok, server} = NimbleOwnership.start_link()
+      iex> NimbleOwnership.fetch_owner(server, [self()], :whatever_key)
+      :error
+
   """
   @spec fetch_owner(server(), [pid(), ...], key(), timeout()) ::
           {:ok, owner :: pid()}
           | {:shared_owner, shared_owner :: pid()}
-          | {:error, reason}
-        when reason: Error.t()
+          | :error
   def fetch_owner(ownership_server, [_ | _] = callers, key, timeout \\ 5000)
       when is_timeout(timeout) do
     GenServer.call(ownership_server, {:fetch_owner, callers, key}, timeout)
