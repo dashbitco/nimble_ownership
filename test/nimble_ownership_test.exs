@@ -316,6 +316,31 @@ defmodule NimbleOwnershipTest do
     end
   end
 
+  describe "set_owner_to_manual_cleanup/2" do
+    test "sets a PID to manual cleanup", %{key: key} do
+      {owner_pid, monitor_ref} = spawn_monitor(fn -> Process.sleep(:infinity) end)
+
+      init_key(owner_pid, key, %{counter: 1})
+
+      assert :ok = NimbleOwnership.set_owner_to_manual_cleanup(@server, owner_pid)
+
+      Process.exit(owner_pid, :kill)
+      assert_receive {:DOWN, ^monitor_ref, _, _, _}
+
+      assert {:ok, ^owner_pid} = NimbleOwnership.fetch_owner(@server, [owner_pid], key)
+      assert NimbleOwnership.get_owned(@server, owner_pid) == %{key => %{counter: 1}}
+
+      assert :ok = NimbleOwnership.cleanup_owner(@server, owner_pid)
+      assert :error = NimbleOwnership.fetch_owner(@server, [owner_pid], key)
+      assert NimbleOwnership.get_owned(@server, owner_pid) == nil
+    end
+
+    test "works if the PID is not an owner" do
+      assert :ok = NimbleOwnership.set_owner_to_manual_cleanup(@server, self())
+      assert NimbleOwnership.get_owned(@server, self()) == nil
+    end
+  end
+
   defp callers do
     [self()] ++ Process.get(:"$callers", [])
   end

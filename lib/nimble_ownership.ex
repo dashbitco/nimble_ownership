@@ -21,7 +21,7 @@ defmodule NimbleOwnership do
 
   A typical use case for such a module is tracking resource ownership across processes
   in order to isolate access to resources in **test suites**. For example, the
-  [Mox](https://hexdocs.pm/mox/Mox.html) library uses this module to track ownership
+  [Mox][mox] library uses this module to track ownership
   of mocks across processes (in shared mode).
 
   ## Usage
@@ -55,6 +55,22 @@ defmodule NimbleOwnership do
   > If the ownership server is in *shared mode* and the shared owner process terminates,
   > the server automatically returns to *private mode*.
 
+  ## Cleanup
+
+  When an owner PID goes down, the ownership server automatically cleans up all the
+  allowances and owned keys associated with that owner PID. If you want to **manually**
+  clean up the allowances and owned keys associated with an owner PID instead, you can
+  use `set_owner_to_manual_cleanup/2` and `cleanup_owner/2`. `set_owner_to_manual_cleanup/2`
+  sets the owner PID to manual cleanup mode, and `cleanup_owner/2` cleans up the allowances
+  and owned keys associated with the owner PID.
+
+  This is mostly useful if you're using this library to write tests, and your tests
+  are based on *expectations*, that is, you first set an expectation (that you store
+  in the ownership server) and then you verify that the expectation was met when exiting
+  the test. Without digging too deep, a practical example of this is [Mox][mox] and its
+  `Mox.expect/3` and `Mox.verify_on_exit!/1` functions.
+
+  [mox]: https://hexdocs.pm/mox/Mox.html
   """
 
   defguardp is_timeout(val) when (is_integer(val) and val > 0) or val == :infinity
@@ -275,32 +291,65 @@ defmodule NimbleOwnership do
     GenServer.call(ownership_server, {:set_mode, {:shared, shared_owner}})
   end
 
+  @doc """
+  Sets the owner PID to manual cleanup mode.
+
+  If `owner_pid` doesn't own any keys, this function still sets its cleanup mode to manual.
+  This means you can call this before any calls to `get_and_update/4` and it will still
+  work as expected.
+
+  > #### Leaks {: .error}
+  >
+  > If you set an owner PID to manual cleanup mode and you don't call `cleanup_owner/2`
+  > before the owner PID goes down, then you will have a leak. This is because the ownership
+  > server will not clean up the allowances and owned keys associated with the owner PID
+  > when said PID goes down.
+
+  See the [*Cleanup* section](#module-cleanup) in the module documentation.
+  """
+  @doc since: "0.3.0"
+  @spec set_owner_to_manual_cleanup(server(), pid()) :: :ok
+  def set_owner_to_manual_cleanup(ownership_server, owner_pid) do
+    GenServer.call(ownership_server, {:set_owner_to_manual_cleanup, owner_pid})
+  end
+
+  @doc """
+  Manually cleans up allowances and owned keys associated with `owner_pid`.
+
+  This is meant to be used in conjunction with `set_owner_to_manual_cleanup/2`.
+
+  See the [*Cleanup* section](#module-cleanup) in the module documentation.
+  """
+  @doc since: "0.3.0"
+  @spec cleanup_owner(server(), pid()) :: :ok
+  def cleanup_owner(ownership_server, owner_pid) when is_pid(owner_pid) do
+    GenServer.call(ownership_server, {:cleanup_owner, owner_pid})
+  end
+
   ## State
 
-  # This is here only for documentation and for understanding the shape of the state.
-  @typedoc false
-  @type t() :: %__MODULE__{
-          owners: %{
-            optional(owner_pid :: pid()) => %{
-              optional(key :: term()) => metadata()
-            }
-          },
-          allowances: %{
-            optional(allowed_pid :: pid()) => %{optional(key()) => owner_pid :: pid()}
-          },
-          lazy_calls: boolean(),
-          deps: %{
-            optional(pid() | (-> pid())) => {:DOWN, :process, pid(), term()}
-          },
-          mode: :private | {:shared, pid()}
-        }
+  defstruct [
+    # The mode can be either :private, or {:shared, shared_owner_pid}.
+    mode: :private,
 
-  defstruct allowances: %{},
-            mode: :private,
-            deps: %{},
-            lazy_calls: false,
-            owners: %{},
-            monitors: %{}
+    # This is a map of %{owner_pid => %{key => metadata}}. Its purpose is to track the metadata
+    # under each key that a owner owns.
+    owners: %{},
+
+    # This tracks what to do when each owner goes down. It's a map of
+    # %{owner_pid => :auto | :manual}.
+    owner_cleanup: %{},
+
+    # This is a map of %{allowed_pid => %{key => owner_pid}}. Its purpose is to track the keys
+    # that a PID is allowed to access, alongside which the owner of those keys is.
+    allowances: %{},
+
+    # This is used for tracking dependencies between processes.
+    deps: %{},
+
+    # This boolean field tracks whether there are any lazy calls in the allowances.
+    lazy_calls: false
+  ]
 
   ## Callbacks
 
@@ -390,13 +439,14 @@ defmodule NimbleOwnership do
         state = put_in(state, [Access.key!(:owners), Access.key(owner_pid, %{}), key], new_meta)
 
         # We should also monitor the new owner, if it hasn't already been monitored. That
-        # can happen if that owner is already the owner of another key.
+        # can happen if that owner is already the owner of another key. We ALWAYS monitor,
+        # so if owner_pid is already an owner we're already monitoring it.
         state =
-          if state.monitors[owner_pid] do
+          if not Map.has_key?(state.owner_cleanup, owner_pid) do
+            _ref = Process.monitor(owner_pid)
             state
           else
-            ref = Process.monitor(owner_pid)
-            put_in(state.monitors[owner_pid], ref)
+            state
           end
 
         {:reply, {:ok, get_value}, state}
@@ -445,22 +495,18 @@ defmodule NimbleOwnership do
     {:reply, :ok, %__MODULE__{state | mode: :private}}
   end
 
-  @impl true
-  def handle_info(msg, state)
-
-  def handle_info({:DOWN, _, _, down_pid, _}, %__MODULE__{mode: {:shared, down_pid}} = state) do
-    {:noreply, %__MODULE__{state | mode: :private}}
+  def handle_call({:set_owner_to_manual_cleanup, owner_pid}, _from, %__MODULE__{} = state) do
+    {:reply, :ok, put_in(state.owner_cleanup[owner_pid], :manual)}
   end
 
-  # An owner went down, so we need to clean up all of its allowances as well as all its keys.
-  def handle_info({:DOWN, _, _, down_pid, _}, state) when is_map_key(state.owners, down_pid) do
-    {_, state} = pop_in(state.owners[down_pid])
+  def handle_call({:cleanup_owner, pid}, _from, %__MODULE__{} = state) do
+    {_, state} = pop_in(state.owners[pid])
 
     allowances =
       Enum.reduce(state.allowances, state.allowances, fn {pid, allowances}, acc ->
         new_allowances =
           for {key, owner_pid} <- allowances,
-              owner_pid != down_pid,
+              owner_pid != pid,
               into: %{},
               do: {key, owner_pid}
 
@@ -469,7 +515,42 @@ defmodule NimbleOwnership do
 
     state = put_in(state.allowances, allowances)
 
-    {:noreply, state}
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info(msg, state)
+
+  # The global owner went down, so we go back to private mode.
+  def handle_info({:DOWN, _, _, down_pid, _}, %__MODULE__{mode: {:shared, down_pid}} = state) do
+    {:noreply, %__MODULE__{state | mode: :private}}
+  end
+
+  # An owner went down, so we need to clean up all of its allowances as well as all its keys.
+  def handle_info({:DOWN, _ref, _, down_pid, _}, state)
+      when is_map_key(state.owners, down_pid) do
+    case state.owner_cleanup[down_pid] do
+      :manual ->
+        {:noreply, state}
+
+      nil ->
+        {_, state} = pop_in(state.owners[down_pid])
+
+        allowances =
+          Enum.reduce(state.allowances, state.allowances, fn {pid, allowances}, acc ->
+            new_allowances =
+              for {key, owner_pid} <- allowances,
+                  owner_pid != down_pid,
+                  into: %{},
+                  do: {key, owner_pid}
+
+            Map.put(acc, pid, new_allowances)
+          end)
+
+        state = put_in(state.allowances, allowances)
+
+        {:noreply, state}
+    end
   end
 
   def handle_info({:DOWN, _, _, down_pid, _}, state) do
