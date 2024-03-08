@@ -88,6 +88,7 @@ defmodule NimbleOwnership.MixProject do
   defp deps do
     [
       {:castore, "~> 1.0", only: :test},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev},
       {:excoveralls, "~> 0.18", only: :test}
     ]
