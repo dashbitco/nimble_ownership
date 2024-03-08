@@ -314,6 +314,24 @@ defmodule NimbleOwnershipTest do
 
       assert :error = NimbleOwnership.fetch_owner(@server, [child_pid, owner_pid], key)
     end
+
+    test "if a child shuts down, the deps of that child are cleaned up but not the whole allowance",
+         %{key: key} do
+      {owner_pid, _owner_monitor_ref} = spawn_monitor(fn -> Process.sleep(:infinity) end)
+      {child_pid1, child_monitor_ref1} = spawn_monitor(fn -> Process.sleep(:infinity) end)
+      {child_pid2, _child_monitor_ref2} = spawn_monitor(fn -> Process.sleep(:infinity) end)
+
+      init_key(owner_pid, key, %{counter: 1})
+
+      assert :ok = NimbleOwnership.allow(@server, owner_pid, child_pid1, key)
+      assert :ok = NimbleOwnership.allow(@server, child_pid1, child_pid2, key)
+
+      Process.exit(child_pid1, :kill)
+      assert_receive {:DOWN, ^child_monitor_ref1, _, _, _}
+
+      assert {:ok, ^owner_pid} =
+               NimbleOwnership.fetch_owner(@server, [child_pid1, owner_pid], key)
+    end
   end
 
   describe "set_owner_to_manual_cleanup/2" do

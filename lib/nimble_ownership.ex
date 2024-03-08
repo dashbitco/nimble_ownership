@@ -444,7 +444,7 @@ defmodule NimbleOwnership do
         state =
           if not Map.has_key?(state.owner_cleanup, owner_pid) do
             _ref = Process.monitor(owner_pid)
-            state
+            put_in(state.owner_cleanup[owner_pid], :auto)
           else
             state
           end
@@ -514,11 +514,11 @@ defmodule NimbleOwnership do
   # An owner went down, so we need to clean up all of its allowances as well as all its keys.
   def handle_info({:DOWN, _ref, _, down_pid, _}, state)
       when is_map_key(state.owners, down_pid) do
-    case state.owner_cleanup[down_pid] do
+    case state.owner_cleanup[down_pid] || :auto do
       :manual ->
         {:noreply, state}
 
-      nil ->
+      :auto ->
         state = pop_owner_and_clean_up_allowances(state, down_pid)
         {:noreply, state}
     end
