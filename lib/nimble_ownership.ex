@@ -117,15 +117,15 @@ defmodule NimbleOwnership do
   end
 
   @doc """
-  Allows `pid_to_allow` to use `key` through `owner_pid` (on the given `ownership_server`).
+  Allows `pid_to_allow` to use `key` through `pid_with_access` (on the given `ownership_server`).
 
-  Use this function when `owner_pid` is allowed access to `key`, and you want
+  Use this function when `pid_with_access` is allowed access to `key`, and you want
   to also allow `pid_to_allow` to use `key`.
 
   This function return an error in the following cases:
 
     * When `pid_to_allow` is already allowed to use `key` via **another owner PID**
-      that is not `owner_pid`. In this case, the `:reason` field of the returned
+      that is not the owner of `pid_with_access`. In this case, the `:reason` field of the returned
       `NimbleOwnership.Error` struct is set to `{:already_allowed, other_owner_pid}`.
 
     * When the ownership server is in [**shared mode**](#module-modes). In this case,
@@ -142,6 +142,13 @@ defmodule NimbleOwnership do
   > and starts a task with `Task.start_link/1`, then the task will be allowed to access
   > the key without having to explicitly call `allow/4`.
 
+  ### Transitive Allowances
+
+  Allowances are **transitive**. If `pid_with_access` allows `pid_to_allow`, it is equivalent
+  to the owner of `pid_with_access` allowing `pid_to_allow`, effectively tying `pid_to_allow`
+  with the owner. If `pid_with_access` terminates, `pid_to_allow` will still have access to the
+  key, until the `owner_pid` itself terminates or removes the allowance.
+
   ## Examples
 
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
@@ -156,10 +163,10 @@ defmodule NimbleOwnership do
   """
   @spec allow(server(), pid(), pid() | (-> pid()), key()) ::
           :ok | {:error, Error.t()}
-  def allow(ownership_server, owner_pid, pid_to_allow, key, timeout \\ 5000)
-      when is_pid(owner_pid) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
+  def allow(ownership_server, pid_with_access, pid_to_allow, key, timeout \\ 5000)
+      when is_pid(pid_with_access) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
              is_timeout(timeout) do
-    GenServer.call(ownership_server, {:allow, owner_pid, pid_to_allow, key}, timeout)
+    GenServer.call(ownership_server, {:allow, pid_with_access, pid_to_allow, key}, timeout)
   end
 
   @doc """
@@ -344,8 +351,8 @@ defmodule NimbleOwnership do
     # that a PID is allowed to access, alongside which the owner of those keys is.
     allowances: %{},
 
-    # This is used for tracking dependencies between processes.
-    deps: %{},
+    # This is used to track which PIDs we're monitoring, to avoid double-monitoring.
+    monitored_pids: MapSet.new(),
 
     # This boolean field tracks whether there are any lazy calls in the allowances.
     lazy_calls: false
@@ -405,12 +412,8 @@ defmodule NimbleOwnership do
 
       nil ->
         state =
-          maybe_add_and_monitor_pid(state, owner_pid, :DOWN, fn {on, deps} ->
-            {on, [{pid_to_allow, key} | deps]}
-          end)
-
-        state =
           state
+          |> maybe_monitor_pid(pid_with_access)
           |> put_in([Access.key!(:allowances), Access.key(pid_to_allow, %{}), key], owner_pid)
           |> update_in([Access.key!(:lazy_calls)], &(&1 or is_function(pid_to_allow, 0)))
 
@@ -486,7 +489,7 @@ defmodule NimbleOwnership do
   end
 
   def handle_call({:set_mode, {:shared, shared_owner_pid}}, _from, %__MODULE__{} = state) do
-    state = maybe_add_and_monitor_pid(state, shared_owner_pid, :DOWN, & &1)
+    state = maybe_monitor_pid(state, shared_owner_pid)
     state = %__MODULE__{state | mode: {:shared, shared_owner_pid}}
     {:reply, :ok, state}
   end
@@ -524,21 +527,10 @@ defmodule NimbleOwnership do
     end
   end
 
+  # A PID that we were monitoring went down. Let's just clean up all its allowances.
   def handle_info({:DOWN, _, _, down_pid, _}, state) do
-    state =
-      case state.deps do
-        %{^down_pid => {:DOWN, _}} ->
-          {{_on, deps}, state} = pop_in(state.deps[down_pid])
-          {_keys_and_values, state} = pop_in(state.allowances[down_pid])
-
-          Enum.reduce(deps, state, fn {pid, key}, acc ->
-            acc.allowances[pid][key] |> pop_in() |> elem(1)
-          end)
-
-        %{} ->
-          state
-      end
-
+    {_keys_and_values, state} = pop_in(state.allowances[down_pid])
+    state = update_in(state.monitored_pids, &MapSet.delete(&1, down_pid))
     {:noreply, state}
   end
 
@@ -561,15 +553,12 @@ defmodule NimbleOwnership do
     %__MODULE__{state | allowances: allowances}
   end
 
-  defp maybe_add_and_monitor_pid(state, pid, on, fun) do
-    case state.deps do
-      %{^pid => entry} ->
-        put_in(state.deps[pid], fun.(entry))
-
-      _ ->
-        Process.monitor(pid)
-        state = put_in(state.deps[pid], fun.({on, []}))
-        state
+  defp maybe_monitor_pid(state, pid) do
+    if pid in state.monitored_pids do
+      state
+    else
+      Process.monitor(pid)
+      update_in(state.monitored_pids, &MapSet.put(&1, pid))
     end
   end
 
@@ -593,20 +582,7 @@ defmodule NimbleOwnership do
 
   defp fix_resolved({_, [], _}, state), do: state
 
-  defp fix_resolved({allowances, fun_to_pids, lazy_calls}, state) do
-    fun_to_pids = Map.new(fun_to_pids)
-
-    deps =
-      Map.new(state.deps, fn {pid, {fun, deps}} ->
-        deps =
-          Enum.map(deps, fn
-            {fun, key} when is_function(fun, 0) -> {Map.get(fun_to_pids, fun, fun), key}
-            other -> other
-          end)
-
-        {pid, {fun, deps}}
-      end)
-
-    %__MODULE__{state | deps: deps, allowances: Map.new(allowances), lazy_calls: lazy_calls}
+  defp fix_resolved({allowances, _fun_to_pids, lazy_calls}, state) do
+    %__MODULE__{state | allowances: Map.new(allowances), lazy_calls: lazy_calls}
   end
 end
