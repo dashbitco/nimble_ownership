@@ -237,6 +237,24 @@ defmodule NimbleOwnershipTest do
       assert get_meta(self(), key) == %{counter: 2}
     end
 
+    test "ignores lazy PIDs that don't actually resolve to a PID", %{key: key} do
+      owner_pid = self()
+
+      # Init the key.
+      init_key(owner_pid, key, %{counter: 1})
+
+      # Allow a lazy PID that will resolve later to nil.
+      assert :ok =
+               NimbleOwnership.allow(
+                 @server,
+                 owner_pid,
+                 fn -> Process.whereis(:"what_pid?!") end,
+                 key
+               )
+
+      assert NimbleOwnership.fetch_owner(@server, [owner_pid], key) == {:ok, owner_pid}
+    end
+
     test "is idempotent", %{key: key} do
       owner_pid = spawn(fn -> Process.sleep(:infinity) end)
 
@@ -244,6 +262,19 @@ defmodule NimbleOwnershipTest do
 
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
       assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key)
+    end
+
+    test "can be used to allow different keys", %{key: key} do
+      key1 = :"#{key}_1"
+      key2 = :"#{key}_2"
+
+      owner_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      init_key(owner_pid, key1, %{})
+      init_key(owner_pid, key2, %{})
+
+      assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key1)
+      assert :ok = NimbleOwnership.allow(@server, owner_pid, self(), key2)
     end
 
     test "returns an error if called in shared mode", %{key: key} do
