@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    name: Tests and linting (Elixir ${{ matrix.pair.elixir }}, OTP ${{ matrix.pair.otp }})
     runs-on: ubuntu-20.04
     env:
       MIX_ENV: test
