@@ -500,22 +500,7 @@ defmodule NimbleOwnership do
   end
 
   def handle_call({:cleanup_owner, pid}, _from, %__MODULE__{} = state) do
-    {_, state} = pop_in(state.owners[pid])
-
-    allowances =
-      Enum.reduce(state.allowances, state.allowances, fn {pid, allowances}, acc ->
-        new_allowances =
-          for {key, owner_pid} <- allowances,
-              owner_pid != pid,
-              into: %{},
-              do: {key, owner_pid}
-
-        Map.put(acc, pid, new_allowances)
-      end)
-
-    state = put_in(state.allowances, allowances)
-
-    {:reply, :ok, state}
+    {:reply, :ok, pop_owner_and_clean_up_allowances(state, pid)}
   end
 
   @impl true
@@ -534,21 +519,7 @@ defmodule NimbleOwnership do
         {:noreply, state}
 
       nil ->
-        {_, state} = pop_in(state.owners[down_pid])
-
-        allowances =
-          Enum.reduce(state.allowances, state.allowances, fn {pid, allowances}, acc ->
-            new_allowances =
-              for {key, owner_pid} <- allowances,
-                  owner_pid != down_pid,
-                  into: %{},
-                  do: {key, owner_pid}
-
-            Map.put(acc, pid, new_allowances)
-          end)
-
-        state = put_in(state.allowances, allowances)
-
+        state = pop_owner_and_clean_up_allowances(state, down_pid)
         {:noreply, state}
     end
   end
@@ -572,6 +543,23 @@ defmodule NimbleOwnership do
   end
 
   ## Helpers
+
+  defp pop_owner_and_clean_up_allowances(state, target_pid) do
+    {_, state} = pop_in(state.owners[target_pid])
+
+    allowances =
+      Enum.reduce(state.allowances, state.allowances, fn {pid, allowances}, acc ->
+        new_allowances =
+          for {key, owner_pid} <- allowances,
+              owner_pid != target_pid,
+              into: %{},
+              do: {key, owner_pid}
+
+        Map.put(acc, pid, new_allowances)
+      end)
+
+    %__MODULE__{state | allowances: allowances}
+  end
 
   defp maybe_add_and_monitor_pid(state, pid, on, fun) do
     case state.deps do
