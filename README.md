@@ -3,6 +3,7 @@
 [![hex.pm badge](https://img.shields.io/badge/Package%20on%20hex.pm-informational)](https://hex.pm/packages/nimble_ownership)
 [![Documentation badge](https://img.shields.io/badge/Documentation-ff69b4)][docs]
 [![CI](https://github.com/dashbitco/nimble_ownership/actions/workflows/ci.yml/badge.svg)](https://github.com/dashbitco/nimble_ownership/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/dashbitco/nimble_ownership/badge.svg?branch=main)](https://coveralls.io/github/dashbitco/nimble_ownership?branch=main)
 
 > Library that allows you to manage ownership of resources across processes.
 
