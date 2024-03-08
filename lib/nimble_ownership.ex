@@ -117,15 +117,15 @@ defmodule NimbleOwnership do
   end
 
   @doc """
-  Allows `pid_to_allow` to use `key` through `owner_pid` (on the given `ownership_server`).
+  Allows `pid_to_allow` to use `key` through `pid_with_access` (on the given `ownership_server`).
 
-  Use this function when `owner_pid` is allowed access to `key`, and you want
+  Use this function when `pid_with_access` is allowed access to `key`, and you want
   to also allow `pid_to_allow` to use `key`.
 
   This function return an error in the following cases:
 
     * When `pid_to_allow` is already allowed to use `key` via **another owner PID**
-      that is not `owner_pid`. In this case, the `:reason` field of the returned
+      that is not `pid_with_access`. In this case, the `:reason` field of the returned
       `NimbleOwnership.Error` struct is set to `{:already_allowed, other_owner_pid}`.
 
     * When the ownership server is in [**shared mode**](#module-modes). In this case,
@@ -142,6 +142,16 @@ defmodule NimbleOwnership do
   > and starts a task with `Task.start_link/1`, then the task will be allowed to access
   > the key without having to explicitly call `allow/4`.
 
+  ### Transitive Allowances
+
+  Allowances are **transitive**. What this means is that the allowance of `pid_to_allow`
+  on `key` does not depend on `pid_with_access` if `pid_with_access` is not the original
+  owner of `key`. That is, if `pid_with_access` is just a PID that is allowed to access
+  `key` through some other owner PID, then `pid_to_allow`'s allowance is not tied to
+  `pid_with_access` after the allowance is made. In other words, `pid_with_access` is only
+  used to allow access to `key`. For example, if `pid_with_access` allows `pid_to_allow`
+  but then goes down, `pid_to_allow` is still allowed to access `key`.
+
   ## Examples
 
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
@@ -156,10 +166,10 @@ defmodule NimbleOwnership do
   """
   @spec allow(server(), pid(), pid() | (-> pid()), key()) ::
           :ok | {:error, Error.t()}
-  def allow(ownership_server, owner_pid, pid_to_allow, key, timeout \\ 5000)
-      when is_pid(owner_pid) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
+  def allow(ownership_server, pid_with_access, pid_to_allow, key, timeout \\ 5000)
+      when is_pid(pid_with_access) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
              is_timeout(timeout) do
-    GenServer.call(ownership_server, {:allow, owner_pid, pid_to_allow, key}, timeout)
+    GenServer.call(ownership_server, {:allow, pid_with_access, pid_to_allow, key}, timeout)
   end
 
   @doc """
@@ -405,7 +415,7 @@ defmodule NimbleOwnership do
 
       nil ->
         state =
-          maybe_add_and_monitor_pid(state, owner_pid, :DOWN, fn {on, deps} ->
+          maybe_add_and_monitor_pid(state, pid_with_access, :DOWN, fn {on, deps} ->
             {on, [{pid_to_allow, key} | deps]}
           end)
 
@@ -524,20 +534,10 @@ defmodule NimbleOwnership do
     end
   end
 
+  # A PID that we were monitoring went down. Let's just clean up all its allowances.
   def handle_info({:DOWN, _, _, down_pid, _}, state) do
-    state =
-      case state.deps do
-        %{^down_pid => {:DOWN, _}} ->
-          {{_on, deps}, state} = pop_in(state.deps[down_pid])
-          {_keys_and_values, state} = pop_in(state.allowances[down_pid])
-
-          Enum.reduce(deps, state, fn {pid, key}, acc ->
-            acc.allowances[pid][key] |> pop_in() |> elem(1)
-          end)
-
-        %{} ->
-          state
-      end
+    {_, state} = pop_in(state.deps[down_pid])
+    {_keys_and_values, state} = pop_in(state.allowances[down_pid])
 
     {:noreply, state}
   end

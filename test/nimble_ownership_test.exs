@@ -315,7 +315,7 @@ defmodule NimbleOwnershipTest do
       assert :error = NimbleOwnership.fetch_owner(@server, [child_pid, owner_pid], key)
     end
 
-    test "if a child shuts down, the deps of that child are cleaned up but not the whole allowance",
+    test "if a child shuts down, the deps of that child are not cleaned up (because that child is not the original owner)",
          %{key: key} do
       {owner_pid, _owner_monitor_ref} = spawn_monitor(fn -> Process.sleep(:infinity) end)
       {child_pid1, child_monitor_ref1} = spawn_monitor(fn -> Process.sleep(:infinity) end)
@@ -329,8 +329,8 @@ defmodule NimbleOwnershipTest do
       Process.exit(child_pid1, :kill)
       assert_receive {:DOWN, ^child_monitor_ref1, _, _, _}
 
-      assert {:ok, ^owner_pid} =
-               NimbleOwnership.fetch_owner(@server, [child_pid1, owner_pid], key)
+      assert :error = NimbleOwnership.fetch_owner(@server, [child_pid1], key)
+      assert {:ok, ^owner_pid} = NimbleOwnership.fetch_owner(@server, [child_pid2], key)
     end
   end
 
