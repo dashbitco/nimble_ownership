@@ -125,7 +125,7 @@ defmodule NimbleOwnership do
   This function return an error in the following cases:
 
     * When `pid_to_allow` is already allowed to use `key` via **another owner PID**
-      that is not `pid_with_access`. In this case, the `:reason` field of the returned
+      that is not the owner of `pid_with_access`. In this case, the `:reason` field of the returned
       `NimbleOwnership.Error` struct is set to `{:already_allowed, other_owner_pid}`.
 
     * When the ownership server is in [**shared mode**](#module-modes). In this case,
