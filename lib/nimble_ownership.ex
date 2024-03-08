@@ -144,9 +144,9 @@ defmodule NimbleOwnership do
 
   ### Transitive Allowances
 
-  Allowances are **transitive**. `pid_with_access` allows `pid_to_allow`, it is equivalent
+  Allowances are **transitive**. If `pid_with_access` allows `pid_to_allow`, it is equivalent
   to the owner of `pid_with_access` allowing `pid_to_allow`, effectively tying `pid_to_allow`
-  with the owner. If `pid_with_access` terminates, `pid_to_allow`will still have access to the
+  with the owner. If `pid_with_access` terminates, `pid_to_allow` will still have access to the
   key, until the `owner_pid` itself terminates or removes the allowance.
 
   ## Examples
