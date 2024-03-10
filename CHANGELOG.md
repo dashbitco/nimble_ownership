@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.1
+
+  * Fix small memory leak related to owner cleanup.
+
 ## v0.3.0
 
   * Fixes around transitive dependencies.
