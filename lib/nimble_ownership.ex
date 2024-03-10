@@ -538,6 +538,7 @@ defmodule NimbleOwnership do
 
   defp pop_owner_and_clean_up_allowances(state, target_pid) do
     {_, state} = pop_in(state.owners[target_pid])
+    {_, state} = pop_in(state.owner_cleanup[target_pid])
 
     allowances =
       Enum.reduce(state.allowances, state.allowances, fn {pid, allowances}, acc ->
