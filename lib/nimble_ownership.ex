@@ -240,8 +240,11 @@ defmodule NimbleOwnership do
       iex> {:ok, server} = NimbleOwnership.start_link()
       iex> {:ok, _} = NimbleOwnership.get_and_update(server, pid, :some_key, fn _ -> {nil, 1} end)
       iex> :ok = NimbleOwnership.allow(server, pid, self(), :some_key)
-      iex> NimbleOwnership.get_and_update(server, self(), :some_key, fn current -> {current, 2} end)
-      {:error, %NimbleOwnership.Error{key: :some_key, reason: {:already_allowed, pid}}}
+      iex> {:error, error} = NimbleOwnership.get_and_update(server, self(), :some_key, fn current -> {current, 2} end)
+      iex> %NimbleOwnership.Error{} = error
+      iex> {:already_allowed, ^pid} = error.reason
+      iex> error.key
+      :some_key
 
   """
   @spec get_and_update(server(), pid(), key(), fun, timeout()) ::
