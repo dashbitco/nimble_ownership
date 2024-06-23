@@ -190,6 +190,18 @@ defmodule NimbleOwnership do
   is the value returned by `fun` in its return tuple. Otherwise, the return value is
   `{:error, reason}` (see also `NimbleOwnership.Error`).
 
+  > #### Allowed Processes {: .warning}
+  >
+  > Processes that are allowed to access `key` under `owner_pid` **cannot update the metadata
+  > using this function**. Only the owner PID can update the metadata.
+  >
+  > If an allowed process attempts to update the metadata under `key`, this function will return
+  > `{:error, ...}`. This function only works if `owner_pid` doesn't own `key` and is not
+  > allowed to access `key` by any other PID—in that case, it's considered as a new ownership and
+  > `fun` receives `nil`.
+  >
+  > See the examples below for more information.
+
   ### Updating Metadata from an Allowed Process
 
   If you don't directly have access to the owner PID, but you want to update the metadata
@@ -203,6 +215,34 @@ defmodule NimbleOwnership do
 
   When the ownership server is set to **shared mode**, you can only call this function
   with `owner_pid` set to the shared owner PID. See [the module documentation](#module-modes).
+
+  ## Examples
+
+  Initializing the ownership of a key:
+
+      iex> pid = spawn(fn -> Process.sleep(:infinity) end)
+      iex> {:ok, server} = NimbleOwnership.start_link()
+      iex> NimbleOwnership.get_and_update(server, pid, :my_key, fn current -> {current, 1} end)
+      {:ok, nil}
+
+  Updating the metadata associated with a key:
+
+      iex> pid = spawn(fn -> Process.sleep(:infinity) end)
+      iex> {:ok, server} = NimbleOwnership.start_link()
+      iex> NimbleOwnership.get_and_update(server, pid, :my_key, fn current -> {current, 1} end)
+      {:ok, nil}
+      iex> NimbleOwnership.get_and_update(server, pid, :my_key, fn current -> {current, 2} end)
+      {:ok, 1}
+
+  Attempting to update the metadata from an allowed process results in an error:
+
+      iex> pid = spawn(fn -> Process.sleep(:infinity) end)
+      iex> {:ok, server} = NimbleOwnership.start_link()
+      iex> {:ok, _} = NimbleOwnership.get_and_update(server, pid, :some_key, fn _ -> {nil, 1} end)
+      iex> :ok = NimbleOwnership.allow(server, pid, self(), :some_key)
+      iex> NimbleOwnership.get_and_update(server, self(), :some_key, fn current -> {current, 2} end)
+      {:error, %NimbleOwnership.Error{key: :some_key, reason: {:already_allowed, pid}}}
+
   """
   @spec get_and_update(server(), pid(), key(), fun, timeout()) ::
           {:ok, get_value} | {:error, Error.t()}
