@@ -627,6 +627,11 @@ defmodule NimbleOwnership do
   defp fix_resolved({_, [], _}, state), do: state
 
   defp fix_resolved({allowances, _fun_to_pids, lazy_calls}, state) do
-    %__MODULE__{state | allowances: Map.new(allowances), lazy_calls: lazy_calls}
+    allowances =
+      Enum.reduce(allowances, %{}, fn {k, v}, acc ->
+        Map.update(acc, k, v, &Map.merge(&1, v))
+      end)
+
+    %__MODULE__{state | allowances: allowances, lazy_calls: lazy_calls}
   end
 end
