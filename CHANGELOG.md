@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.2
+
+  * Fix multiple allowances under the same key.
+
 ## v0.3.1
 
   * Fix small memory leak related to owner cleanup.
