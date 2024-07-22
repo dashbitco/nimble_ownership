@@ -274,8 +274,8 @@ defmodule NimbleOwnershipTest do
       {:ok, pid_1} = Task.start_link(parent_process_fun.(1))
       {:ok, pid_2} = Task.start_link(parent_process_fun.(2))
 
-      lazy_process_fun = fn f ->
-        fn ->
+      lazy_process_fun = fn ->
+        for _ <- 1..2 do
           receive do
             {:go, parent_pid, key} ->
               assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [parent_pid], key)
@@ -287,12 +287,11 @@ defmodule NimbleOwnershipTest do
               end)
 
               send(parent_pid, :done)
-              f.(f).()
           end
         end
       end
 
-      {:ok, lazy_pid} = Task.start_link(lazy_process_fun.(lazy_process_fun))
+      {:ok, lazy_pid} = Task.start_link(lazy_process_fun)
       Process.register(lazy_pid, :lazy_pid)
 
       send(pid_1, {:go, lazy_pid})
