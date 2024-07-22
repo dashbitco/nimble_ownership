@@ -237,6 +237,71 @@ defmodule NimbleOwnershipTest do
       assert get_meta(self(), key) == %{counter: 2}
     end
 
+    test "properly merges lazy allowed PIDs that resolve on the next upsert", %{key: key} do
+      parent_pid = self()
+
+      parent_process_fun = fn counter ->
+        fn ->
+          # Needed to trick double allowance checker 
+          Process.delete(:"$callers")
+
+          # Init the key
+          key = "#{counter} → #{key}"
+          init_key(self(), key, %{counter: 1})
+
+          # Allow two lazy PID that will resolve later
+          assert :ok =
+                   NimbleOwnership.allow(
+                     @server,
+                     self(),
+                     fn -> Process.whereis(:lazy_pid) end,
+                     key
+                   )
+
+          receive do
+            {:go, lazy_pid} ->
+              send(lazy_pid, {:go, self(), key})
+              assert_receive :done
+
+              assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+              assert get_meta(self(), key) == %{counter: 2}
+
+              send(parent_pid, :parent_process_done)
+          end
+        end
+      end
+
+      {:ok, pid_1} = Task.start_link(parent_process_fun.(1))
+      {:ok, pid_2} = Task.start_link(parent_process_fun.(2))
+
+      lazy_process_fun = fn f ->
+        fn ->
+          receive do
+            {:go, parent_pid, key} ->
+              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [parent_pid], key)
+              assert owner_pid == parent_pid
+
+              NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
+                assert info == %{counter: 1}
+                {:ok, %{counter: 2}}
+              end)
+
+              send(parent_pid, :done)
+              f.(f).()
+          end
+        end
+      end
+
+      {:ok, lazy_pid} = Task.start_link(lazy_process_fun.(lazy_process_fun))
+      Process.register(lazy_pid, :lazy_pid)
+
+      send(pid_1, {:go, lazy_pid})
+      send(pid_2, {:go, lazy_pid})
+
+      assert_receive :parent_process_done
+      assert_receive :parent_process_done
+    end
+
     test "ignores lazy PIDs that don't actually resolve to a PID", %{key: key} do
       owner_pid = self()
 
