@@ -149,6 +149,15 @@ defmodule NimbleOwnership do
   with the owner. If `pid_with_access` terminates, `pid_to_allow` will still have access to the
   key, until the `owner_pid` itself terminates or removes the allowance.
 
+  ### Deferred (lazy) allowances
+
+  If the process is not yet started at the moment of allowance definition, it might be allowed
+  as a function, assuming at the moment of invocation it would have been started.
+  If the function cannot be resolved to a pid during invocation, the expectation will not succeed.
+
+  The function might return a `t:pid/0` or a list of `t:pid/0`s, the latter might be helpful
+  if one needs to allow a pool of unnamed workers.
+
   ## Examples
 
       iex> pid = spawn(fn -> Process.sleep(:infinity) end)
@@ -161,7 +170,7 @@ defmodule NimbleOwnership do
       {:ok, self()}
 
   """
-  @spec allow(server(), pid(), pid() | (-> pid()), key()) ::
+  @spec allow(server(), pid(), pid() | (-> pid()) | (-> [pid()]), key()) ::
           :ok | {:error, Error.t()}
   def allow(ownership_server, pid_with_access, pid_to_allow, key, timeout \\ 5000)
       when is_pid(pid_with_access) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
@@ -610,18 +619,37 @@ defmodule NimbleOwnership do
     state.allowances
     |> Enum.reduce({[], [], false}, fn
       {key, value}, {result, resolved, unresolved} when is_function(key, 0) ->
-        case key.() do
-          pid when is_pid(pid) ->
-            {[{pid, value} | result], [{key, pid} | resolved], unresolved}
-
-          _ ->
-            {[{key, value} | result], resolved, true}
-        end
+        resolve_once(key.(), {key, value}, {result, resolved, unresolved})
 
       kv, {result, resolved, unresolved} ->
         {[kv | result], resolved, unresolved}
     end)
     |> fix_resolved(state)
+  end
+
+  defp resolve_once(pid, {key, value}, {result, resolved, unresolved}) when is_pid(pid) do
+    {[{pid, value} | result], [{key, pid} | resolved], unresolved}
+  end
+
+  defp resolve_once([pid | pids], {key, value}, {result, resolved, unresolved})
+       when is_pid(pid) do
+    resolve_once(
+      pids,
+      {key, value},
+      {[{pid, value} | result], [{key, pid} | resolved], unresolved}
+    )
+  end
+
+  defp resolve_once([_not_a_pid | pids], kv, {result, resolved, _unresolved}) do
+    resolve_once(pids, kv, {[kv | result], resolved, true})
+  end
+
+  defp resolve_once([], _kv, {result, resolved, unresolved}) do
+    {result, resolved, unresolved}
+  end
+
+  defp resolve_once(_, kv, {result, resolved, _unresolved}) do
+    {[kv | result], resolved, true}
   end
 
   defp fix_resolved({_, [], _}, state), do: state

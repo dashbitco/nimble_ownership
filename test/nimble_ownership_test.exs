@@ -237,6 +237,55 @@ defmodule NimbleOwnershipTest do
       assert get_meta(self(), key) == %{counter: 2}
     end
 
+    test "supports lists of lazy allowed PIDs that resolve on the next upsert", %{key: key} do
+      parent_pid = self()
+
+      # Init the key.
+      init_key(parent_pid, key, %{counter: 1})
+
+      # Allow two lazy PIDs that will resolve later.
+      assert :ok =
+               NimbleOwnership.allow(
+                 @server,
+                 self(),
+                 fn -> [Process.whereis(:lazy_pid_1), Process.whereis(:lazy_pid_2)] end,
+                 key
+               )
+
+      lazy_pid_fun =
+        fn ->
+          receive do
+            :go ->
+              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers(), key)
+              assert owner_pid == parent_pid
+
+              NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
+                assert %{counter: counter} = info
+                {:ok, %{counter: counter + 1}}
+              end)
+
+              send(parent_pid, :done)
+          end
+        end
+
+      {:ok, lazy_pid_1} = Task.start_link(lazy_pid_fun)
+      Process.register(lazy_pid_1, :lazy_pid_1)
+      {:ok, lazy_pid_2} = Task.start_link(lazy_pid_fun)
+      Process.register(lazy_pid_2, :lazy_pid_2)
+
+      send(lazy_pid_1, :go)
+      assert_receive :done
+
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert get_meta(self(), key) == %{counter: 2}
+
+      send(lazy_pid_2, :go)
+      assert_receive :done
+
+      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert get_meta(self(), key) == %{counter: 3}
+    end
+
     test "properly merges lazy allowed PIDs that resolve on the next upsert", %{key: key} do
       parent_pid = self()
 
