@@ -153,10 +153,10 @@ defmodule NimbleOwnership do
 
   If the process is not yet started at the moment of allowance definition, it might be allowed
   as a function, assuming at the moment of invocation it would have been started.
-  If the function cannot be resolved to a pid during invocation, the expectation will not succeed.
+  If the function cannot be resolved to a PID during invocation, the expectation will not succeed.
 
-  The function might return a `t:pid/0` or a list of `t:pid/0`s, the latter might be helpful
-  if one needs to allow a pool of unnamed workers.
+  The function might return a `t:pid/0` or a list of `t:pid/0`s. A list might be helpful
+  if one needs to allow multiple PIDs that resolve from a single term, such as the list of workers in a pool.
 
   ## Examples
 
@@ -170,8 +170,8 @@ defmodule NimbleOwnership do
       {:ok, self()}
 
   """
-  @spec allow(server(), pid(), pid() | (-> pid()) | (-> [pid()]), key()) ::
-          :ok | {:error, Error.t()}
+  @spec allow(server(), pid(), pid() | (-> resolved_pid)), key()) ::
+          :ok | {:error, Error.t()} when resolved_pid: pid() | [pids()]
   def allow(ownership_server, pid_with_access, pid_to_allow, key, timeout \\ 5000)
       when is_pid(pid_with_access) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
              is_timeout(timeout) do
