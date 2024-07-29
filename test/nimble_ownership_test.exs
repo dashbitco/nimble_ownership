@@ -248,7 +248,9 @@ defmodule NimbleOwnershipTest do
                NimbleOwnership.allow(
                  @server,
                  self(),
-                 fn -> [Process.whereis(:lazy_pid_1), Process.whereis(:lazy_pid_2)] end,
+                 fn ->
+                   [Process.whereis(:lazy_pid_1), :not_a_pid, Process.whereis(:lazy_pid_2)]
+                 end,
                  key
                )
 
