@@ -171,7 +171,8 @@ defmodule NimbleOwnership do
 
   """
   @spec allow(server(), pid(), pid() | (-> resolved_pid), key()) ::
-          :ok | {:error, Error.t()} when resolved_pid: pid() | [pid()]
+          :ok | {:error, Error.t()}
+        when resolved_pid: pid() | [pid()]
   def allow(ownership_server, pid_with_access, pid_to_allow, key, timeout \\ 5000)
       when is_pid(pid_with_access) and (is_pid(pid_to_allow) or is_function(pid_to_allow, 0)) and
              is_timeout(timeout) do
