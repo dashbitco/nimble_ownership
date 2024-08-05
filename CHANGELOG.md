@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.0
+
+  * Accept a list of PIDs from the function you pass to `NimbleOwnership.allow/5`.
+
 ## v0.3.2
 
   * Fix multiple allowances under the same key.
