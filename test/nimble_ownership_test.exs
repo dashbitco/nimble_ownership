@@ -83,6 +83,31 @@ defmodule NimbleOwnershipTest do
       assert Exception.message(error) =~ "this PID is already allowed to access key"
     end
 
+    test "returns an error if PID A allows PID X (lazily) and  PID X tries to update",
+         %{key: key} do
+      owner_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      init_key(owner_pid, key, 1)
+
+      assert :ok =
+               NimbleOwnership.allow(
+                 @server,
+                 owner_pid,
+                 fn -> Process.whereis(:self_name) end,
+                 key
+               )
+
+      Process.register(self(), :self_name)
+
+      assert {:error, error} =
+               NimbleOwnership.get_and_update(@server, self(), key, fn _ ->
+                 {:yeah, %{}}
+               end)
+
+      assert error == %Error{reason: {:already_allowed, owner_pid}, key: key}
+      assert Exception.message(error) =~ "this PID is already allowed to access key"
+    end
+
     test "can set and update keys in shared mode", %{key: key} do
       NimbleOwnership.set_mode_to_shared(@server, self())
 
@@ -278,6 +303,7 @@ defmodule NimbleOwnershipTest do
               end)
 
               send(parent_pid, :done)
+              Process.sleep(:infinity)
           end
         end
 
@@ -289,13 +315,13 @@ defmodule NimbleOwnershipTest do
       send(lazy_pid_1, :go)
       assert_receive :done
 
-      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert NimbleOwnership.fetch_owner(@server, [lazy_pid_1], key) == {:ok, self()}
       assert get_meta(self(), key) == %{counter: 2}
 
       send(lazy_pid_2, :go)
       assert_receive :done
 
-      assert NimbleOwnership.fetch_owner(@server, [self()], key) == {:ok, self()}
+      assert NimbleOwnership.fetch_owner(@server, [lazy_pid_2], key) == {:ok, self()}
       assert get_meta(self(), key) == %{counter: 3}
     end
 
@@ -340,7 +366,7 @@ defmodule NimbleOwnershipTest do
         for _ <- 1..2 do
           receive do
             {:go, parent_pid, key} ->
-              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [parent_pid], key)
+              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
               assert owner_pid == parent_pid
 
               NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
@@ -379,6 +405,43 @@ defmodule NimbleOwnershipTest do
                )
 
       assert NimbleOwnership.fetch_owner(@server, [owner_pid], key) == {:ok, owner_pid}
+    end
+
+    test "does not resolve irrelevant lazy PIDs", %{key: key} do
+      parent_pid = self()
+
+      key2 = :"#{key}-2"
+
+      # Init the key.
+      init_key(parent_pid, key, %{counter: 1})
+      init_key(parent_pid, key2, %{})
+
+      # Allow a lazy PID that will resolve later.
+      assert :ok =
+               NimbleOwnership.allow(
+                 @server,
+                 self(),
+                 fn -> Process.whereis(:lazy_pid) end,
+                 key
+               )
+
+      # Allow a lazy PID that will never resolver
+      assert :ok =
+               NimbleOwnership.allow(
+                 @server,
+                 self(),
+                 fn -> raise "Too eager!" end,
+                 key2
+               )
+
+      {:ok, lazy_pid} =
+        Task.start_link(fn ->
+          Process.sleep(:infinity)
+        end)
+
+      Process.register(lazy_pid, :lazy_pid)
+
+      assert NimbleOwnership.fetch_owner(@server, [lazy_pid], key) == {:ok, self()}
     end
 
     test "is idempotent", %{key: key} do
