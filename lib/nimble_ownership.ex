@@ -529,10 +529,10 @@ defmodule NimbleOwnership do
     state = revalidate_lazy_calls(state)
 
     Enum.find_value(callers, {:reply, :error, state}, fn caller ->
-      cond do
-        owner_pid = state.allowances[caller][key] -> {:reply, {:ok, owner_pid}, state}
-        _meta = state.owners[caller][key] -> {:reply, {:ok, caller}, state}
-        true -> nil
+      case state do
+        %{allowances: %{^caller => %{^key => owner_pid}}} -> {:reply, {:ok, owner_pid}, state}
+        %{owners: %{^caller => %{^key => _meta}}} -> {:reply, {:ok, caller}, state}
+        _ -> nil
       end
     end)
   end
