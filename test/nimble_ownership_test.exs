@@ -32,6 +32,17 @@ defmodule NimbleOwnershipTest do
       assert owner_pid == self()
     end
 
+    test "nil as metadata is ok", %{key: key} do
+      assert {:ok, nil} =
+               NimbleOwnership.get_and_update(@server, self(), key, fn arg ->
+                 assert arg == nil
+                 {nil, arg}
+               end)
+
+      assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
+      assert owner_pid == self()
+    end
+
     test "updates the metadata with the returned value from the function", %{key: key} do
       test_pid = self()
       init_key(test_pid, key, %{counter: 1})
