@@ -83,8 +83,7 @@ defmodule NimbleOwnershipTest do
       assert Exception.message(error) =~ "this PID is already allowed to access key"
     end
 
-    test "returns an error if PID A allows PID X (lazily) and  PID X tries to update",
-         %{key: key} do
+    test "returns an error if PID A allows PID B lazily and PID B tries to update", %{key: key} do
       owner_pid = spawn(fn -> Process.sleep(:infinity) end)
 
       init_key(owner_pid, key, 1)
@@ -330,7 +329,7 @@ defmodule NimbleOwnershipTest do
 
       parent_process_fun = fn counter ->
         fn ->
-          # Needed to trick double allowance checker 
+          # Needed to trick double allowance checker
           Process.delete(:"$callers")
 
           # Init the key

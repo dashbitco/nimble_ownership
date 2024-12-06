@@ -522,14 +522,20 @@ defmodule NimbleOwnership do
   end
 
   def handle_call({:fetch_owner, callers, key}, _from, %__MODULE__{mode: :private} = state) do
-    with nil <- fetch_owner_once(state, callers, key) do
-      state = resolve_lazy_calls_for_key(state, key)
-      {fetch_owner_once(state, callers, key), state}
-    end
-    |> case do
-      {nil, new_state} -> {:reply, :error, new_state}
-      {found, new_state} -> {:reply, {:ok, found}, new_state}
-      found -> {:reply, {:ok, found}, state}
+    {owner, state} =
+      case fetch_owner_once(state, callers, key) do
+        nil ->
+          state = resolve_lazy_calls_for_key(state, key)
+          {fetch_owner_once(state, callers, key), state}
+
+        owner ->
+          {owner, state}
+      end
+
+    if is_nil(owner) do
+      {:reply, :error, state}
+    else
+      {:reply, {:ok, owner}, state}
     end
   end
 
@@ -624,8 +630,7 @@ defmodule NimbleOwnership do
 
   defp resolve_lazy_calls_for_key(state, key) do
     updated_allowances =
-      state.allowances
-      |> Enum.reduce(state.allowances, fn
+      Enum.reduce(state.allowances, state.allowances, fn
         {fun, value}, allowances when is_function(fun, 0) and is_map_key(value, key) ->
           result =
             fun.()
