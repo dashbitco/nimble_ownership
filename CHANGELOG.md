@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.1
+
+  * Fix a potential bug that was caused by resolving lazy allowances too early. See [this issue](https://github.com/dashbitco/nimble_ownership/pull/8) for more context if needed.
+
 ## v1.0.0
 
   * Accept a list of PIDs from the function you pass to `NimbleOwnership.allow/5`.
