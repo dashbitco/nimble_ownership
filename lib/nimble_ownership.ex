@@ -134,13 +134,14 @@ defmodule NimbleOwnership do
 
   > #### Tracking Callers {: .tip}
   >
-  > The ownership server automatically considers all the direct and indirect "children"
-  > of an owner PID as allowed to access the owner's keys. By children, we mean processes
-  > that have been spawned by the owner PID or by any of its children, which is something
-  > we determine by looking at the `:"$callers"` key in the process dictionary.
-  > This is useful for many standard process kinds. For example, if a process owns a key
-  > and starts a task with `Task.start_link/1`, then the task will be allowed to access
-  > the key without having to explicitly call `allow/4`.
+  > The ownership server **does not** consider the direct and indirect "children" of a PID
+  > when determining who is allowed to access a key. By "children", we mean processes that
+  > have been spawned by the owner PID or by any of its children.
+  >
+  > This behavior is so that the ownership server can stay as flexible as possible. Users
+  > of the server (and of this library) will usually want to call `fetch_owner/3` with
+  > a list of callers that generally can come from `Process.get(:"$callers", [])` or similar.
+  > This works for many use cases, such as `GenServer` or `Task` processes.
 
   ### Transitive Allowances
 

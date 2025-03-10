@@ -160,6 +160,34 @@ defmodule NimbleOwnershipTest do
     end
   end
 
+  describe "fetch_owner/4" do
+    test "retrieves the owner from a list of callers", %{key: key} do
+      test_pid = self()
+
+      # Initialize the key in the test process.
+      assert {:ok, :yeah} =
+               NimbleOwnership.get_and_update(@server, self(), key, fn arg ->
+                 assert arg == nil
+                 {:yeah, %{counter: 1}}
+               end)
+
+      # Make sure that if the owner is in the callers, we can fetch the key.
+      task =
+        Task.async(fn ->
+          first_task_pid = self()
+
+          Task.async(fn ->
+            callers = [first_task_pid, test_pid]
+            assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers, key)
+            assert owner_pid == test_pid
+          end)
+          |> Task.await()
+        end)
+
+      Task.await(task)
+    end
+  end
+
   describe "allow/4" do
     test "returns an error if the PID that is supposed to have access doesn't have access",
          %{key: key} do
@@ -199,7 +227,7 @@ defmodule NimbleOwnershipTest do
             Task.start_link(fn ->
               receive do
                 :go ->
-                  assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers(), key)
+                  assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
                   assert owner_pid == parent_pid
 
                   NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
@@ -251,7 +279,7 @@ defmodule NimbleOwnershipTest do
         Task.start_link(fn ->
           receive do
             :go ->
-              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers(), key)
+              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
               assert owner_pid == parent_pid
 
               NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
@@ -293,7 +321,7 @@ defmodule NimbleOwnershipTest do
         fn ->
           receive do
             :go ->
-              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, callers(), key)
+              assert {:ok, owner_pid} = NimbleOwnership.fetch_owner(@server, [self()], key)
               assert owner_pid == parent_pid
 
               NimbleOwnership.get_and_update(@server, owner_pid, key, fn info ->
@@ -329,9 +357,6 @@ defmodule NimbleOwnershipTest do
 
       parent_process_fun = fn counter ->
         fn ->
-          # Needed to trick double allowance checker
-          Process.delete(:"$callers")
-
           # Init the key
           key = "#{counter} → #{key}"
           init_key(self(), key, %{counter: 1})
@@ -576,10 +601,6 @@ defmodule NimbleOwnershipTest do
       assert :ok = NimbleOwnership.set_owner_to_manual_cleanup(@server, self())
       assert NimbleOwnership.get_owned(@server, self()) == nil
     end
-  end
-
-  defp callers do
-    [self()] ++ Process.get(:"$callers", [])
   end
 
   defp init_key(owner, key, meta) do
