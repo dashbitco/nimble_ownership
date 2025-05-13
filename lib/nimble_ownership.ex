@@ -275,8 +275,7 @@ defmodule NimbleOwnership do
   Gets the owner of `key` through one of the `callers`.
 
   If one of the `callers` owns `key` or is allowed access to `key`,
-  then this function returns `{:ok, {owner_pid, metadata}}` where `metadata` is the
-  metadata associated with the `key` under the owner.
+  then this function returns `{:ok, owner_pid}`.
 
   If the ownership server is in [**shared mode**](#module-modes), then this function
   returns `{:shared_owner, shared_owner_pid}` where `shared_owner_pid` is the PID of the
