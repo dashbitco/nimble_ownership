@@ -14,13 +14,6 @@ defmodule NimbleOwnership.MixProject do
 
       # Tests
       test_coverage: [tool: ExCoveralls],
-      preferred_cli_env: [
-        coveralls: :test,
-        "coveralls.detail": :test,
-        "coveralls.post": :test,
-        "coveralls.html": :test,
-        "coveralls.json": :test
-      ],
 
       # Hex package
       description: "Track ownership of resources across processes.",
@@ -36,6 +29,18 @@ defmodule NimbleOwnership.MixProject do
   def application do
     [
       extra_applications: []
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.post": :test,
+        "coveralls.html": :test,
+        "coveralls.json": :test
+      ]
     ]
   end
 
