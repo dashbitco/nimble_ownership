@@ -545,7 +545,7 @@ defmodule NimbleOwnership do
 
   def handle_call({:set_mode, {:shared, shared_owner_pid}}, _from, %__MODULE__{} = state) do
     state = maybe_monitor_pid(state, shared_owner_pid)
-    state = %__MODULE__{state | mode: {:shared, shared_owner_pid}}
+    state = %{state | mode: {:shared, shared_owner_pid}}
     {:reply, :ok, state}
   end
 
@@ -591,7 +591,7 @@ defmodule NimbleOwnership do
 
   ## Helpers
 
-  defp pop_owner_and_clean_up_allowances(state, target_pid) do
+  defp pop_owner_and_clean_up_allowances(%__MODULE__{} = state, target_pid) do
     {_, state} = pop_in(state.owners[target_pid])
     {_, state} = pop_in(state.owner_cleanup[target_pid])
 
@@ -606,7 +606,7 @@ defmodule NimbleOwnership do
         Map.put(acc, pid, new_allowances)
       end)
 
-    %__MODULE__{state | allowances: allowances}
+    %{state | allowances: allowances}
   end
 
   defp maybe_monitor_pid(state, pid) do
