@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.2
+
+  * Fix compilation warnings on Elixir 1.19. Zero functional changes for users of this library.
+
 ## v1.0.1
 
   * Fix a potential bug that was caused by resolving lazy allowances too early. See [this issue](https://github.com/dashbitco/nimble_ownership/pull/8) for more context if needed.
