@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: Tests and linting (Elixir ${{ matrix.pair.elixir }}, OTP ${{ matrix.pair.otp }})
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     env:
       MIX_ENV: test
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -18,11 +18,11 @@ jobs:
       matrix:
         include:
           - pair:
-              elixir: "1.11"
-              otp: "21.3"
+              elixir: "1.15"
+              otp: "24.3"
           - pair:
-              elixir: "1.18"
-              otp: "27.2"
+              elixir: "1.19"
+              otp: "28.1"
             lint: true
             coverage: true
     steps:
@@ -48,7 +48,7 @@ jobs:
             ${{ runner.os }}-mix-${{ matrix.pair.elixir }}-${{ matrix.pair.otp }}-
 
       - name: Fetch dependencies
-        run: mix deps.get --check-lock
+        run: mix deps.get --check-locked
 
       - name: Check formatting
         run: mix format --check-formatted
@@ -57,9 +57,6 @@ jobs:
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused
         if: ${{ matrix.lint }}
-
-      - name: Compile dependencies
-        run: mix deps.compile
 
       - name: Compile and check for warnings
         run: mix compile --warnings-as-errors
